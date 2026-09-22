@@ -761,11 +761,45 @@ def send_and_wait(tab_id, text, wait_timeout_ms=60000, silence_ms=1500):
     )
 
 
-def bridge(tab_from, tab_to, rounds=3):
-    """Run a true bidirectional ChatGPT relay.
+def _validate_chatgpt_tab(tab_id):
+    """Fail-closed validation for a relay participant tab."""
+    url = core.tab_url(tab_id)
+    if not url:
+        return {
+            "ok": False,
+            "error": "relay_tab_unavailable",
+            "tab_id": tab_id,
+        }
 
-    Compatibility wrapper around parley.relay.run_bidirectional_relay.
-    One round is one complete A -> B -> A exchange.
+    adapter = detect(url)
+    if adapter.name != "chatgpt":
+        return {
+            "ok": False,
+            "error": "relay_tab_not_chatgpt",
+            "tab_id": tab_id,
+            "url": url,
+        }
+
+    return {
+        "ok": True,
+        "tab_id": tab_id,
+        "url": url,
+        "adapter": "chatgpt",
+    }
+
+
+def bridge(
+    tab_from,
+    tab_to,
+    rounds=3,
+    *,
+    control=None,
+    include_text=False,
+):
+    """Run a guarded bidirectional ChatGPT relay.
+
+    One round is one complete A -> B -> A exchange. Pause/stop control is
+    cooperative at safe checkpoints between browser transactions.
     """
     from .relay import run_bidirectional_relay
 
@@ -775,4 +809,7 @@ def bridge(tab_from, tab_to, rounds=3):
         rounds,
         read_response=read_response,
         send_and_wait=send_and_wait,
+        validate_tab=_validate_chatgpt_tab,
+        control=control,
+        include_text=include_text,
     )
