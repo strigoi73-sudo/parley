@@ -387,7 +387,7 @@ class ChatGPTSendAndWaitTests(unittest.TestCase):
             "user_count": 2,
             "user": {
                 "text": "hello",
-                "turn_id": "user-submitted",
+                "turn_id": "user-rerendered",
                 "turn_index": 1,
             },
             "assistant": {
