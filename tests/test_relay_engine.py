@@ -313,6 +313,10 @@ class BidirectionalRelayTests(unittest.TestCase):
             calls.append((tab_id, text, kwargs))
             if tab_id == "B":
                 self.assertEqual(
+                    kwargs.get("wait_timeout_ms"),
+                    300000,
+                )
+                self.assertEqual(
                     kwargs.get("expected_reply_prefix"),
                     "B REPLY:",
                 )
@@ -325,6 +329,10 @@ class BidirectionalRelayTests(unittest.TestCase):
                     "b1",
                     0,
                 )
+            self.assertEqual(
+                kwargs.get("wait_timeout_ms"),
+                300000,
+            )
             self.assertEqual(
                 kwargs.get("expected_reply_prefix"),
                 "A REPLY:",
