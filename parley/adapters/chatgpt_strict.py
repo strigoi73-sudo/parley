@@ -164,3 +164,58 @@ CHATGPT_GET_TURN_STATE_JS = """
   };
 })()
 """
+
+
+CHATGPT_PREPARE_COMPOSER_JS = """
+(() => {
+  const host = (location.hostname || '').toLowerCase();
+  const isChatGPT = host === 'chatgpt.com' || host === 'www.chatgpt.com' || host === 'chat.openai.com';
+  if (!isChatGPT) return {ok:false,error:'not_chatgpt_page',source:'chatgpt-strict'};
+
+  const input = document.querySelector('#prompt-textarea');
+  if (!input) {
+    return {ok:false,error:'chatgpt_composer_not_found',source:'chatgpt-strict'};
+  }
+
+  input.focus();
+
+  if (input.tagName === 'TEXTAREA') {
+    input.select();
+  } else if (input.isContentEditable || input.getAttribute('contenteditable') === 'true') {
+    const selection = window.getSelection();
+    const range = document.createRange();
+    range.selectNodeContents(input);
+    selection.removeAllRanges();
+    selection.addRange(range);
+  } else {
+    return {ok:false,error:'chatgpt_composer_not_editable',source:'chatgpt-strict'};
+  }
+
+  return {
+    ok:true,
+    source:'chatgpt-strict',
+    tag:input.tagName,
+    contenteditable:!!input.isContentEditable
+  };
+})()
+"""
+
+
+CHATGPT_CLICK_SEND_JS = """
+(() => {
+  const host = (location.hostname || '').toLowerCase();
+  const isChatGPT = host === 'chatgpt.com' || host === 'www.chatgpt.com' || host === 'chat.openai.com';
+  if (!isChatGPT) return {ok:false,error:'not_chatgpt_page',source:'chatgpt-strict'};
+
+  const button = document.querySelector('button[data-testid="send-button"]');
+  if (!button) {
+    return {ok:false,error:'chatgpt_send_button_not_found',source:'chatgpt-strict'};
+  }
+  if (button.disabled) {
+    return {ok:false,error:'chatgpt_send_button_disabled',source:'chatgpt-strict'};
+  }
+
+  button.click();
+  return {ok:true,source:'chatgpt-strict',method:'chatgpt-send-button'};
+})()
+"""
