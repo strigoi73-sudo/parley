@@ -53,14 +53,21 @@ class StrictChatGPTExtractorTests(unittest.TestCase):
 
     def test_turn_state_exposes_explicit_latest_user_turn(self):
         self.assertIn(
-            'article[data-turn="user"]',
+            'const articleSelector = \'article[data-turn="\' + roleName + \'"]\';',
             CHATGPT_GET_TURN_STATE_JS,
         )
         self.assertIn(
-            '[data-message-author-role="user"]',
+            'const roleSelector = \'[data-message-author-role="\' + roleName + \'"]\';',
             CHATGPT_GET_TURN_STATE_JS,
         )
-        self.assertIn("user:user", CHATGPT_GET_TURN_STATE_JS)
+        self.assertIn(
+            "const userTurns = collectTurns('user');",
+            CHATGPT_GET_TURN_STATE_JS,
+        )
+        self.assertIn(
+            "const user = latestTurn(userTurns, 'user');",
+            CHATGPT_GET_TURN_STATE_JS,
+        )
         self.assertNotIn("document.body.innerText", CHATGPT_GET_TURN_STATE_JS)
 
     def test_mixed_turn_structures_are_merged_in_dom_order(self):
@@ -83,12 +90,19 @@ class StrictChatGPTExtractorTests(unittest.TestCase):
         )
 
     def test_current_and_role_based_turn_structures_are_supported(self):
-        for selector in (
-            'article[data-turn="assistant"]',
-            '[data-message-author-role="assistant"]',
+        for script in (
+            CHATGPT_GET_RESPONSE_JS,
+            CHATGPT_GET_MSG_COUNT_JS,
         ):
-            self.assertIn(selector, CHATGPT_GET_RESPONSE_JS)
-            self.assertIn(selector, CHATGPT_GET_MSG_COUNT_JS)
+            self.assertIn(
+                'const articleSelector = \'article[data-turn="\' + roleName + \'"]\';',
+                script,
+            )
+            self.assertIn(
+                'const roleSelector = \'[data-message-author-role="\' + roleName + \'"]\';',
+                script,
+            )
+            self.assertIn("collectTurns('assistant')", script)
 
 
 class WorkflowRoutingTests(unittest.TestCase):
