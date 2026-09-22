@@ -131,7 +131,22 @@ UNIVERSAL_GET_RESPONSE = """
         };
     }
 
-    // Strategy 1b: agent-turn (newer ChatGPT)
+    // Strategy 1b: article-level ChatGPT turns (current UI fallback)
+    msgs = document.querySelectorAll('article[data-turn="assistant"]');
+    if (msgs.length > 0) {
+        const last = msgs[msgs.length - 1];
+        const content = last.querySelector('[data-message-author-role="assistant"] .markdown, .markdown, .markdown-new-styling') || last;
+        return {
+            text: (content.innerText || content.textContent || '').trim(),
+            count: msgs.length,
+            source: 'chatgpt-article-turn',
+            isLatest: true,
+            hasStreaming: !!last.querySelector('[data-is-streaming="true"]'),
+            hasStopButton: !!document.querySelector('button[data-testid="stop-button"], button[aria-label*="Stop"], button[aria-label*="stop"]')
+        };
+    }
+
+    // Strategy 1c: agent-turn (newer ChatGPT)
     msgs = document.querySelectorAll('.agent-turn');
     if (msgs.length > 0) {
         const last = msgs[msgs.length - 1];
@@ -278,6 +293,8 @@ UNIVERSAL_GET_MSG_COUNT = """
 (() => {
     let msgs = document.querySelectorAll('[data-message-author-role="assistant"]');
     if (msgs.length > 0) return { count: msgs.length, source: 'chatgpt' };
+    msgs = document.querySelectorAll('article[data-turn="assistant"]');
+    if (msgs.length > 0) return { count: msgs.length, source: 'chatgpt-article-turn' };
     msgs = document.querySelectorAll('.agent-turn');
     if (msgs.length > 0) return { count: msgs.length, source: 'chatgpt-agent-turn' };
     msgs = document.querySelectorAll('model-response');
@@ -398,6 +415,8 @@ def make_mutation_observer_js(timeout_ms, silence_ms, initial_msg_count=0, prev_
         function getMsgCount() {{
             let msgs = document.querySelectorAll('[data-message-author-role="assistant"]');
             if (msgs.length > 0) return msgs.length;
+            msgs = document.querySelectorAll('article[data-turn="assistant"]');
+            if (msgs.length > 0) return msgs.length;
             msgs = document.querySelectorAll('.agent-turn');
             if (msgs.length > 0) return msgs.length;
             msgs = document.querySelectorAll('model-response');
@@ -412,6 +431,12 @@ def make_mutation_observer_js(timeout_ms, silence_ms, initial_msg_count=0, prev_
         function getLatestAssistantText() {{
             let msgs = document.querySelectorAll('[data-message-author-role="assistant"]');
             if (msgs.length > 0) return msgs[msgs.length - 1].innerText || '';
+            msgs = document.querySelectorAll('article[data-turn="assistant"]');
+            if (msgs.length > 0) {
+                const last = msgs[msgs.length - 1];
+                const content = last.querySelector('[data-message-author-role="assistant"] .markdown, .markdown, .markdown-new-styling') || last;
+                return (content.innerText || content.textContent || '').trim();
+            }
             msgs = document.querySelectorAll('.agent-turn');
             if (msgs.length > 0) return msgs[msgs.length - 1].innerText || '';
 
@@ -471,6 +496,12 @@ def make_mutation_observer_js(timeout_ms, silence_ms, initial_msg_count=0, prev_
         function getAnyText() {{
             let msgs = document.querySelectorAll('[data-message-author-role="assistant"]');
             if (msgs.length > 0) return msgs[msgs.length - 1].innerText;
+            msgs = document.querySelectorAll('article[data-turn="assistant"]');
+            if (msgs.length > 0) {
+                const last = msgs[msgs.length - 1];
+                const content = last.querySelector('[data-message-author-role="assistant"] .markdown, .markdown, .markdown-new-styling') || last;
+                return (content.innerText || content.textContent || '').trim();
+            }
             msgs = document.querySelectorAll('.agent-turn');
             if (msgs.length > 0) return msgs[msgs.length - 1].innerText;
             msgs = document.querySelectorAll('model-response');
