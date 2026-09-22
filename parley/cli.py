@@ -32,6 +32,7 @@ Environment:
     PARLEY_CDP_PORT   CDP port (default: 9222)
 """
 
+import os
 import sys
 import json
 
