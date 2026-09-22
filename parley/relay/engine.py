@@ -435,25 +435,22 @@ def run_bidirectional_relay(
         TEST_A_REPLY_PREFIX,
     )
     result["test_protocol"] = test_protocol
+    test_protocol_suffixes = False
     if test_protocol:
-        if not _has_reply_suffix(
+        # The authoritative Project protocols require only the A/B reply
+        # prefixes. If a chat also emits the optional terminal marker, keep
+        # that stricter mode for the rest of this relay; otherwise remain
+        # backward-compatible with prefix-only initialized test chats.
+        test_protocol_suffixes = _has_reply_suffix(
             current_a["text"],
             TEST_A_REPLY_SUFFIX,
-        ):
-            return fail(
-                "initial_test_reply_end_marker_missing",
-                "read_a",
-                detail={
-                    "expected_suffix": TEST_A_REPLY_SUFFIX,
-                    "response_text": current_a["text"],
-                },
-            )
+        )
+        result["test_protocol_terminal_markers"] = test_protocol_suffixes
         record(
             "test_protocol_activated",
             a_prefix=TEST_A_REPLY_PREFIX,
-            a_suffix=TEST_A_REPLY_SUFFIX,
             b_prefix=TEST_B_REPLY_PREFIX,
-            b_suffix=TEST_B_REPLY_SUFFIX,
+            terminal_markers=test_protocol_suffixes,
         )
 
     current_b = None
@@ -521,7 +518,11 @@ def run_bidirectional_relay(
                     tab_b,
                     current_a["text"],
                     expected_reply_prefix=TEST_B_REPLY_PREFIX,
-                    expected_reply_suffix=TEST_B_REPLY_SUFFIX,
+                    expected_reply_suffix=(
+                        TEST_B_REPLY_SUFFIX
+                        if test_protocol_suffixes
+                        else None
+                    ),
                 )
             else:
                 b_raw = send_and_wait(tab_b, current_a["text"])
@@ -549,10 +550,15 @@ def run_bidirectional_relay(
                     "a_to_b",
                     round_number,
                 )
-            if not _has_reply_markers(
+            if not _has_reply_prefix(
                 current_b["text"],
                 TEST_B_REPLY_PREFIX,
-                TEST_B_REPLY_SUFFIX,
+            ) or (
+                test_protocol_suffixes
+                and not _has_reply_suffix(
+                    current_b["text"],
+                    TEST_B_REPLY_SUFFIX,
+                )
             ):
                 return fail(
                     "relay_test_reply_marker_missing",
@@ -560,7 +566,11 @@ def run_bidirectional_relay(
                     round_number=round_number,
                     detail={
                         "expected_prefix": TEST_B_REPLY_PREFIX,
-                        "expected_suffix": TEST_B_REPLY_SUFFIX,
+                        "expected_suffix": (
+                            TEST_B_REPLY_SUFFIX
+                            if test_protocol_suffixes
+                            else None
+                        ),
                         "response_text": current_b["text"],
                     },
                 )
@@ -625,7 +635,11 @@ def run_bidirectional_relay(
                     tab_a,
                     current_b["text"],
                     expected_reply_prefix=TEST_A_REPLY_PREFIX,
-                    expected_reply_suffix=TEST_A_REPLY_SUFFIX,
+                    expected_reply_suffix=(
+                        TEST_A_REPLY_SUFFIX
+                        if test_protocol_suffixes
+                        else None
+                    ),
                 )
             else:
                 a_raw = send_and_wait(tab_a, current_b["text"])
@@ -653,10 +667,15 @@ def run_bidirectional_relay(
                     "b_to_a",
                     round_number,
                 )
-            if not _has_reply_markers(
+            if not _has_reply_prefix(
                 next_a["text"],
                 TEST_A_REPLY_PREFIX,
-                TEST_A_REPLY_SUFFIX,
+            ) or (
+                test_protocol_suffixes
+                and not _has_reply_suffix(
+                    next_a["text"],
+                    TEST_A_REPLY_SUFFIX,
+                )
             ):
                 return fail(
                     "relay_test_reply_marker_missing",
@@ -664,7 +683,11 @@ def run_bidirectional_relay(
                     round_number=round_number,
                     detail={
                         "expected_prefix": TEST_A_REPLY_PREFIX,
-                        "expected_suffix": TEST_A_REPLY_SUFFIX,
+                        "expected_suffix": (
+                            TEST_A_REPLY_SUFFIX
+                            if test_protocol_suffixes
+                            else None
+                        ),
                         "response_text": next_a["text"],
                     },
                 )
