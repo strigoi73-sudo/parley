@@ -39,6 +39,7 @@ class ChatGPTSendAndWaitTests(unittest.TestCase):
         silence_ms=200,
         expected_reply_prefix=None,
         expected_reply_suffix=None,
+        should_stop=None,
     ):
         ws = FakeSocket()
         clock = FakeClock()
@@ -96,9 +97,58 @@ class ChatGPTSendAndWaitTests(unittest.TestCase):
                 adapter=self.adapter,
                 expected_reply_prefix=expected_reply_prefix,
                 expected_reply_suffix=expected_reply_suffix,
+                should_stop=should_stop,
             )
 
         return result, ws, connect, calls
+
+    def test_timeout_free_marked_wait_stops_only_on_control_signal(self):
+        pre = {
+            "ok": True,
+            "source": "chatgpt-strict",
+            "assistant_count": 1,
+            "user_count": 1,
+            "assistant": {
+                "text": "A REPLY: old\n\nA REPLY END",
+                "turn_id": "assistant-old",
+                "turn_index": 0,
+                "hasStreaming": False,
+            },
+            "user": {
+                "text": "old prompt",
+                "turn_id": "user-old",
+                "turn_index": 0,
+            },
+            "hasStopButton": False,
+        }
+        submitted = {
+            **pre,
+            "user_count": 2,
+            "user": {
+                "text": "hello",
+                "turn_id": "user-submitted",
+                "turn_index": 1,
+            },
+        }
+
+        checks = {"count": 0}
+
+        def should_stop():
+            checks["count"] += 1
+            return checks["count"] >= 8
+
+        result, _, _, _ = self.run_transaction(
+            [pre, submitted, submitted],
+            timeout_ms=None,
+            silence_ms=100,
+            expected_reply_prefix="B REPLY:",
+            expected_reply_suffix="B REPLY END",
+            should_stop=should_stop,
+        )
+
+        self.assertFalse(result["response_complete"])
+        self.assertEqual(result["error"], "chatgpt_wait_stopped")
+        self.assertGreaterEqual(checks["count"], 8)
 
     def test_completed_new_turn_uses_one_connection(self):
         old = {
@@ -836,6 +886,7 @@ class ChatGPTSendAndWaitTests(unittest.TestCase):
             adapter=self.adapter,
             expected_reply_prefix=None,
             expected_reply_suffix=None,
+            should_stop=None,
         )
 
 
