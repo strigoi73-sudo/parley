@@ -204,10 +204,11 @@ class LiveBrowserManager:
                     ):
                         continue
 
-                    return response.get(
-                        "result",
-                        response.get("error", {}),
-                    )
+                    if "result" in response:
+                        return response["result"]
+                    if "error" in response:
+                        return {"error": response["error"]}
+                    return {"error": "malformed CDP response"}
 
                 return {"error": "timeout"}
 
