@@ -258,6 +258,60 @@ class RelayCLITests(unittest.TestCase):
             output_json=False,
         )
 
+    def test_cmd_relay_startup_reset_propagates_to_b(self):
+        tabs = [
+            {
+                "id": "TAB-A",
+                "title": "Chat A",
+                "url": "https://chatgpt.com/c/a",
+            },
+            {
+                "id": "TAB-B",
+                "title": "Chat B",
+                "url": "https://chatgpt.com/c/b",
+            },
+        ]
+        responses = [
+            {
+                "response_text": "RESET CHAT",
+                "response_complete": True,
+            },
+            {
+                "response_text": "RESET CHAT",
+                "response_complete": True,
+            },
+        ]
+
+        with mock.patch.object(
+            cli,
+            "_chatgpt_tabs",
+            return_value=tabs,
+        ), mock.patch.object(
+            cli.workflows,
+            "send_and_wait",
+            side_effect=responses,
+        ) as send_wait, mock.patch.object(
+            cli,
+            "RelaySession",
+        ) as session_cls:
+            code = cli.cmd_relay(
+                ["1", "2", "--rounds=2", "--prompt-a"],
+                input_fn=lambda _: "RESET CHAT",
+            )
+
+        self.assertEqual(code, 0)
+        self.assertEqual(send_wait.call_count, 2)
+        self.assertEqual(send_wait.call_args_list[1].args, ("TAB-B", "RESET CHAT"))
+        self.assertEqual(
+            send_wait.call_args_list[1].kwargs["expected_reply_prefix"],
+            "B REPLY:",
+        )
+        self.assertEqual(
+            send_wait.call_args_list[1].kwargs["expected_reply_suffix"],
+            "B REPLY END",
+        )
+        session_cls.assert_not_called()
+
     def test_cmd_relay_prompt_a_failure_does_not_start_session(self):
         tabs = [
             {
@@ -294,6 +348,59 @@ class RelayCLITests(unittest.TestCase):
 
         self.assertEqual(code, 1)
         session_cls.assert_not_called()
+
+    def test_interactive_relay_treats_coordinated_reset_as_success(self):
+        class FakeSession:
+            exception = None
+
+            def __init__(self):
+                self.alive = True
+                self._result = {
+                    "status": "stopped",
+                    "state": "STOPPED",
+                    "rounds_requested": 2,
+                    "rounds_completed": 1,
+                    "transfers": [],
+                    "reset_requested": True,
+                    "reset_by": "B",
+                    "reset_propagated": True,
+                    "reset_acknowledged_by": "A",
+                    "restart_point": "A",
+                }
+
+            def start(self):
+                self.alive = False
+                return self
+
+            def is_alive(self):
+                return self.alive
+
+            def join(self):
+                return self._result
+
+            def status(self):
+                return {
+                    "status": "stopped",
+                    "state": "STOPPED",
+                    "control": "running",
+                    "rounds_completed": 1,
+                    "rounds_requested": 2,
+                    "awaiting_extension": False,
+                    "transfers_completed": 0,
+                    "last_transfer": None,
+                }
+
+        output = io.StringIO()
+        with mock.patch("sys.stdout", output):
+            code = cli._run_interactive_relay(
+                FakeSession(),
+                input_stream=io.StringIO(""),
+                output_json=False,
+                sleep=lambda _: None,
+            )
+
+        self.assertEqual(code, 0)
+        self.assertIn("Reset coordinated: B -> A", output.getvalue())
 
     def test_cmd_relay_accepts_numbered_selection(self):
         tabs = [
