@@ -112,6 +112,54 @@ class BidirectionalRelayTests(unittest.TestCase):
         self.assertEqual(result["latest_a"]["text"], "A3")
         self.assertEqual(result["latest_b"]["text"], "B2")
 
+    def test_initial_context_is_attached_only_to_first_a_to_b_transfer(self):
+        calls = []
+        response_queue = [
+            completed_reply("B1", "b1", 0),
+            completed_reply("A2", "a2", 1),
+            completed_reply("B2", "b2", 1),
+            completed_reply("A3", "a3", 2),
+        ]
+
+        def send_and_wait(tab_id, text):
+            calls.append((tab_id, text))
+            return response_queue.pop(0)
+
+        result = run_bidirectional_relay(
+            "A",
+            "B",
+            2,
+            read_response=lambda _: strict_turn("A1", "a1", 0),
+            send_and_wait=send_and_wait,
+            initial_context=(
+                "A argues more privacy concerns; "
+                "B argues fewer privacy concerns."
+            ),
+        )
+
+        self.assertEqual(result["status"], "complete")
+        self.assertEqual(calls[0][0], "B")
+        self.assertIn(
+            "PARLEY SESSION BRIEF (human-provided; "
+            "applies to both Chat A and Chat B):",
+            calls[0][1],
+        )
+        self.assertIn(
+            "B argues fewer privacy concerns.",
+            calls[0][1],
+        )
+        self.assertIn("CHAT A OPENING REPLY:\nA1", calls[0][1])
+        self.assertEqual(calls[1], ("A", "B1"))
+        self.assertEqual(calls[2], ("B", "A2"))
+        self.assertEqual(calls[3], ("A", "B2"))
+        self.assertEqual(
+            sum(
+                item.get("event") == "initial_context_attached"
+                for item in result["audit"]
+            ),
+            1,
+        )
+
     def test_state_history_reflects_directional_sequence(self):
         result = run_bidirectional_relay(
             "A",
@@ -395,6 +443,7 @@ class BidirectionalRelayTests(unittest.TestCase):
             control=None,
             include_text=False,
             event_sink=None,
+            initial_context=None,
         )
 
 
