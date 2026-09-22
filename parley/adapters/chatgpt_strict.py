@@ -107,52 +107,86 @@ CHATGPT_GET_TURN_STATE_JS = """
   const assistantCount = assistantArticles.length || assistantRoles.length;
   const userCount = userArticles.length || userRoles.length;
 
-  let turn = null;
-  let role = null;
-  let selector = '';
+  function latestTurn(articles, roles, roleName, count) {
+    let turn = null;
+    let role = null;
+    let selector = '';
 
-  if (assistantArticles.length) {
-    turn = assistantArticles[assistantArticles.length - 1];
-    role = turn.querySelector('[data-message-author-role="assistant"]');
-    selector = 'article[data-turn="assistant"]';
-  } else if (assistantRoles.length) {
-    role = assistantRoles[assistantRoles.length - 1];
-    turn = role.closest('article') || role;
-    selector = '[data-message-author-role="assistant"]';
-  }
+    if (articles.length) {
+      turn = articles[articles.length - 1];
+      role = turn.querySelector('[data-message-author-role="' + roleName + '"]');
+      selector = 'article[data-turn="' + roleName + '"]';
+    } else if (roles.length) {
+      role = roles[roles.length - 1];
+      turn = role.closest('article') || role;
+      selector = '[data-message-author-role="' + roleName + '"]';
+    } else {
+      return null;
+    }
 
-  let assistant = null;
-  if (turn || role) {
     let content = null;
-    if (role) {
-      content = role.querySelector('.markdown') || role.querySelector('.markdown-new-styling') || role;
-    }
-    if (!content && turn) {
-      content = turn.querySelector('[data-message-author-role="assistant"] .markdown') ||
-                turn.querySelector('.markdown') ||
-                turn.querySelector('.markdown-new-styling') ||
-                turn.querySelector('[data-message-author-role="assistant"]');
+    if (roleName === 'assistant') {
+      if (role) {
+        content = role.querySelector('.markdown') ||
+                  role.querySelector('.markdown-new-styling') ||
+                  role;
+      }
+      if (!content && turn) {
+        content = turn.querySelector('[data-message-author-role="assistant"] .markdown') ||
+                  turn.querySelector('.markdown') ||
+                  turn.querySelector('.markdown-new-styling') ||
+                  turn.querySelector('[data-message-author-role="assistant"]');
+      }
+    } else {
+      content = role ||
+                (turn && turn.querySelector('[data-message-author-role="user"]')) ||
+                turn;
     }
 
-    const text = content ? (content.innerText || content.textContent || '').trim() : '';
+    const text = content
+      ? (content.innerText || content.textContent || '').trim()
+      : '';
+
     const turnId =
-      (turn && (turn.getAttribute('data-message-id') || turn.getAttribute('data-turn-id') || turn.id)) ||
-      (role && (role.getAttribute('data-message-id') || role.id)) ||
+      (turn && (
+        turn.getAttribute('data-message-id') ||
+        turn.getAttribute('data-turn-id') ||
+        turn.id
+      )) ||
+      (role && (
+        role.getAttribute('data-message-id') ||
+        role.id
+      )) ||
       null;
 
-    assistant = {
+    return {
       text:text,
       turn_id:turnId,
-      turn_index:assistantCount - 1,
+      turn_index:count - 1,
       selector:selector,
-      hasStreaming:!!(
+      hasStreaming: roleName === 'assistant' ? !!(
         (turn && turn.querySelector('[data-is-streaming="true"]')) ||
         (role && role.querySelector('[data-is-streaming="true"]'))
-      )
+      ) : false
     };
   }
 
-  const stop = document.querySelector('button[data-testid="stop-button"], button[aria-label*="Stop"], button[aria-label*="stop"]');
+  const assistant = latestTurn(
+    assistantArticles,
+    assistantRoles,
+    'assistant',
+    assistantCount
+  );
+  const user = latestTurn(
+    userArticles,
+    userRoles,
+    'user',
+    userCount
+  );
+
+  const stop = document.querySelector(
+    'button[data-testid="stop-button"], button[aria-label*="Stop"], button[aria-label*="stop"]'
+  );
 
   return {
     ok:true,
@@ -160,6 +194,7 @@ CHATGPT_GET_TURN_STATE_JS = """
     assistant_count:assistantCount,
     user_count:userCount,
     assistant:assistant,
+    user:user,
     hasStopButton:!!stop
   };
 })()
