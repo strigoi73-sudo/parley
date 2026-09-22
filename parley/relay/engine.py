@@ -181,6 +181,7 @@ def run_bidirectional_relay(
     control=None,
     include_text=False,
     event_sink=None,
+    initial_context=None,
 ):
     """Run a guarded A -> B -> A relay for a fixed number of rounds.
 
@@ -516,16 +517,35 @@ def run_bidirectional_relay(
             fingerprint=fingerprint,
         )
 
+        delivery_text = current_a["text"]
+        if round_number == 1 and str(initial_context or "").strip():
+            shared_context = str(initial_context).strip()
+            delivery_text = (
+                "PARLEY SESSION BRIEF "
+                "(human-provided; applies to both Chat A and Chat B):\n"
+                + shared_context
+                + "\n\nCHAT A OPENING REPLY:\n"
+                + current_a["text"]
+            )
+            record(
+                "initial_context_attached",
+                round=round_number,
+                direction="A->B",
+                context_chars=len(shared_context),
+                context_hash=turn_text_hash({"text": shared_context}),
+                delivered_chars=len(delivery_text),
+            )
+
         try:
             if test_protocol:
                 b_raw = send_and_wait(
                     tab_b,
-                    current_a["text"],
+                    delivery_text,
                     expected_reply_prefix=TEST_B_REPLY_PREFIX,
                     expected_reply_suffix=TEST_B_REPLY_SUFFIX,
                 )
             else:
-                b_raw = send_and_wait(tab_b, current_a["text"])
+                b_raw = send_and_wait(tab_b, delivery_text)
         except Exception as exc:
             return fail(
                 "relay_transfer_exception",
