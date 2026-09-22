@@ -282,26 +282,31 @@ class RelaySafetyTests(unittest.TestCase):
                 control=control,
             )
 
-        thread = threading.Thread(target=run)
+        thread = threading.Thread(target=run, daemon=True)
         thread.start()
 
-        deadline = time.monotonic() + 2
-        while (
-            not control.awaiting_round_extension
-            and time.monotonic() < deadline
-        ):
-            time.sleep(0.01)
+        try:
+            deadline = time.monotonic() + 2
+            while (
+                not control.awaiting_round_extension
+                and time.monotonic() < deadline
+            ):
+                time.sleep(0.01)
 
-        self.assertTrue(control.awaiting_round_extension)
-        self.assertTrue(thread.is_alive())
-        self.assertNotIn("result", holder)
+            self.assertTrue(control.awaiting_round_extension)
+            self.assertTrue(thread.is_alive())
+            self.assertNotIn("result", holder)
 
-        control.finish_at_round_limit()
-        thread.join(timeout=2)
+            control.finish_at_round_limit()
+            thread.join(timeout=2)
 
-        self.assertFalse(thread.is_alive())
-        self.assertEqual(holder["result"]["status"], "complete")
-        self.assertEqual(holder["result"]["rounds_completed"], 1)
+            self.assertFalse(thread.is_alive())
+            self.assertEqual(holder["result"]["status"], "complete")
+            self.assertEqual(holder["result"]["rounds_completed"], 1)
+        finally:
+            if thread.is_alive():
+                control.stop()
+                thread.join(timeout=1)
 
     def test_interactive_round_limit_extension_resumes_same_relay(self):
         control = RelayControl(
@@ -329,40 +334,45 @@ class RelaySafetyTests(unittest.TestCase):
                 control=control,
             )
 
-        thread = threading.Thread(target=run)
+        thread = threading.Thread(target=run, daemon=True)
         thread.start()
 
-        deadline = time.monotonic() + 2
-        while (
-            not control.awaiting_round_extension
-            and time.monotonic() < deadline
-        ):
-            time.sleep(0.01)
-
-        self.assertTrue(control.awaiting_round_extension)
-        control.extend_round_limit(2)
-
-        deadline = time.monotonic() + 2
-        saw_second_prompt = False
-        while time.monotonic() < deadline:
-            if (
-                control.awaiting_round_extension
-                and control.round_limit == 2
+        try:
+            deadline = time.monotonic() + 2
+            while (
+                not control.awaiting_round_extension
+                and time.monotonic() < deadline
             ):
-                saw_second_prompt = True
-                break
-            time.sleep(0.01)
+                time.sleep(0.01)
 
-        self.assertTrue(saw_second_prompt)
-        control.finish_at_round_limit()
-        thread.join(timeout=2)
+            self.assertTrue(control.awaiting_round_extension)
+            control.extend_round_limit(2)
 
-        self.assertFalse(thread.is_alive())
-        result = holder["result"]
-        self.assertEqual(result["status"], "complete")
-        self.assertEqual(result["rounds_requested"], 2)
-        self.assertEqual(result["rounds_completed"], 2)
-        self.assertEqual(len(result["transfers"]), 4)
+            deadline = time.monotonic() + 2
+            saw_second_prompt = False
+            while time.monotonic() < deadline:
+                if (
+                    control.awaiting_round_extension
+                    and control.round_limit == 2
+                ):
+                    saw_second_prompt = True
+                    break
+                time.sleep(0.01)
+
+            self.assertTrue(saw_second_prompt)
+            control.finish_at_round_limit()
+            thread.join(timeout=2)
+
+            self.assertFalse(thread.is_alive())
+            result = holder["result"]
+            self.assertEqual(result["status"], "complete")
+            self.assertEqual(result["rounds_requested"], 2)
+            self.assertEqual(result["rounds_completed"], 2)
+            self.assertEqual(len(result["transfers"]), 4)
+        finally:
+            if thread.is_alive():
+                control.stop()
+                thread.join(timeout=1)
 
     def test_round_limit_can_extend_while_relay_is_running(self):
         control = RelayControl(round_limit=1)
