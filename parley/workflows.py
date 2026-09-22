@@ -426,6 +426,7 @@ def _chatgpt_send_and_wait(
     silence_ms=1500,
     adapter=None,
     expected_reply_prefix=None,
+    expected_reply_suffix=None,
 ):
     """Strict ChatGPT send/wait transaction using one target connection.
 
@@ -544,6 +545,7 @@ def _chatgpt_send_and_wait(
         # React rollbacks to the pre-submission assistant turn.
         if expected_reply_prefix:
             expected_prefix = str(expected_reply_prefix).strip()
+            expected_suffix = str(expected_reply_suffix or "").strip()
             last_text = ""
             last_change = time.monotonic()
             candidate_replacements = 0
@@ -576,7 +578,12 @@ def _chatgpt_send_and_wait(
                     (current or {}).get("text") or ""
                 ).strip()
                 is_reset = current_text == "RESET CHAT"
-                is_marked = current_text.startswith(expected_prefix)
+                has_open_marker = current_text.startswith(expected_prefix)
+                has_close_marker = bool(
+                    expected_suffix
+                    and current_text.endswith(expected_suffix)
+                )
+                is_marked = has_open_marker and has_close_marker
 
                 eligible = bool(
                     current
@@ -587,7 +594,9 @@ def _chatgpt_send_and_wait(
                 if not eligible:
                     # The latest rendered assistant may temporarily be
                     # "Thinking", disappear, or roll back to the old answer.
-                    # None of those can satisfy a marked test response.
+                    # A partial reply with only the opening marker is also
+                    # ineligible; the terminal marker must be the final
+                    # non-whitespace text before it can be relayed.
                     candidate_seen = False
                     last_identity = None
                     last_text = ""
@@ -653,6 +662,7 @@ def _chatgpt_send_and_wait(
                             candidate_replacements
                         ),
                         "expected_reply_prefix": expected_prefix,
+                        "expected_reply_suffix": expected_suffix,
                         "response_duration_ms": int(
                             (now - started) * 1000
                         ),
@@ -665,6 +675,7 @@ def _chatgpt_send_and_wait(
                 "track_marked_response",
                 response_text=last_text,
                 expected_reply_prefix=expected_prefix,
+                expected_reply_suffix=expected_suffix,
                 response_candidate_replacements=candidate_replacements,
                 pre_msg_count=pre_assistant_count,
                 pre_user_count=pre_user_count,
@@ -978,6 +989,7 @@ def send_and_wait(
     wait_timeout_ms=60000,
     silence_ms=1500,
     expected_reply_prefix=None,
+    expected_reply_suffix=None,
 ):
     """Send text and wait for a new completed response.
 
@@ -999,6 +1011,7 @@ def send_and_wait(
             silence_ms=silence_ms,
             adapter=adapter,
             expected_reply_prefix=expected_reply_prefix,
+            expected_reply_suffix=expected_reply_suffix,
         )
 
     return _legacy_send_and_wait(
