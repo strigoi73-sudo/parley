@@ -1,13 +1,19 @@
 """Parley CLI - browser automation and two-ChatGPT relay controls.
 
 Common commands:
-    parley list
+    parley [--live|--classic] list
     parley chats
+    parley relay [tab_a] [tab_b] [--rounds N] [--include-text] [--json]
+
+The human-facing `chats` and `relay` commands use live mode by default
+unless PARLEY_CONNECTION_MODE or --classic explicitly says otherwise.
+
+Other commands:
+    parley list
     parley read <tab_id>
     parley send <tab_id> <text...>
     parley send-wait <tab_id> <text...> [--timeout N]
     parley bridge <tab_a> <tab_b> [rounds=3]
-    parley relay [tab_a] [tab_b] [--rounds N] [--include-text] [--json]
 
 Interactive relay controls:
     p   pause after the current browser transaction
@@ -28,12 +34,19 @@ Generic browser-automation commands:
     parley cookies <tab_id> [domain]
     parley set-cookie <tab_id> <name> <value> <domain> [path=/]
 
+Global transport options:
+    --live      attach to the already-running Chrome via DevToolsActivePort
+    --classic   use the inherited localhost CDP transport
+
 Environment:
+    PARLEY_CONNECTION_MODE  classic or live
+    PARLEY_CHROME_USER_DATA_DIR  override Chrome user-data directory
     PARLEY_CDP_HOST   CDP host (default: localhost)
     PARLEY_CDP_PORT   CDP port (default: 9222)
 """
 
 import json
+import os
 import queue
 import sys
 import threading
@@ -402,11 +415,33 @@ def cmd_relay(parts, input_fn=input, input_stream=None):
 
 def main(argv=None):
     argv = list(sys.argv if argv is None else argv)
+
+    explicit_mode = None
+    if "--live" in argv[1:]:
+        explicit_mode = "live"
+        argv.remove("--live")
+    if "--classic" in argv[1:]:
+        if explicit_mode is not None:
+            print("Command error: choose only one of --live or --classic")
+            return 2
+        explicit_mode = "classic"
+        argv.remove("--classic")
+
     if len(argv) < 2:
         print(__doc__)
         return 0
 
     cmd = argv[1]
+
+    if explicit_mode is not None:
+        os.environ["PARLEY_CONNECTION_MODE"] = explicit_mode
+    elif (
+        cmd in ("chats", "relay")
+        and "PARLEY_CONNECTION_MODE" not in os.environ
+    ):
+        # The primary relay workflow targets the user's already-running,
+        # signed-in Chrome session.
+        os.environ["PARLEY_CONNECTION_MODE"] = "live"
 
     try:
         if cmd == "list":
