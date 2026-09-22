@@ -314,8 +314,9 @@ class BidirectionalRelayTests(unittest.TestCase):
             if tab_id == "B":
                 self.assertEqual(
                     kwargs.get("wait_timeout_ms"),
-                    300000,
+                    None,
                 )
+                self.assertTrue(callable(kwargs.get("should_stop")))
                 self.assertEqual(
                     kwargs.get("expected_reply_prefix"),
                     "B REPLY:",
@@ -331,8 +332,9 @@ class BidirectionalRelayTests(unittest.TestCase):
                 )
             self.assertEqual(
                 kwargs.get("wait_timeout_ms"),
-                300000,
+                None,
             )
+            self.assertTrue(callable(kwargs.get("should_stop")))
             self.assertEqual(
                 kwargs.get("expected_reply_prefix"),
                 "A REPLY:",
@@ -378,6 +380,38 @@ class BidirectionalRelayTests(unittest.TestCase):
             calls[1][2]["expected_reply_suffix"],
             "A REPLY END",
         )
+
+    def test_cooperative_wait_stop_returns_stopped_not_error(self):
+        control = mock.Mock()
+        control.state = "running"
+        control.round_limit = 1
+        control.wait_until_runnable.return_value = True
+
+        def send_and_wait(tab_id, text, **kwargs):
+            control.state = "stopped"
+            self.assertTrue(kwargs["should_stop"]())
+            return {
+                "error": "chatgpt_wait_stopped",
+                "response_complete": False,
+            }
+
+        result = run_bidirectional_relay(
+            "A",
+            "B",
+            1,
+            read_response=lambda _: strict_turn(
+                "A REPLY: starting answer\n\nA REPLY END",
+                "a1",
+                0,
+            ),
+            send_and_wait=send_and_wait,
+            control=control,
+        )
+
+        self.assertEqual(result["status"], "stopped")
+        self.assertEqual(result["state"], "STOPPED")
+        self.assertEqual(result["stage"], "a_to_b")
+        self.assertNotIn("error", result)
 
     def test_marked_initial_a_reply_requires_terminal_marker(self):
         send = mock.Mock()
