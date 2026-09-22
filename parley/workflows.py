@@ -579,9 +579,9 @@ def _chatgpt_send_and_wait(
                 ).strip()
                 is_reset = current_text == "RESET CHAT"
                 has_open_marker = current_text.startswith(expected_prefix)
-                has_close_marker = bool(
-                    expected_suffix
-                    and current_text.endswith(expected_suffix)
+                has_close_marker = (
+                    not expected_suffix
+                    or current_text.endswith(expected_suffix)
                 )
                 is_marked = has_open_marker and has_close_marker
 
@@ -594,9 +594,10 @@ def _chatgpt_send_and_wait(
                 if not eligible:
                     # The latest rendered assistant may temporarily be
                     # "Thinking", disappear, or roll back to the old answer.
-                    # A partial reply with only the opening marker is also
-                    # ineligible; the terminal marker must be the final
-                    # non-whitespace text before it can be relayed.
+                    # When a terminal marker is configured, a partial
+                    # reply with only the opening marker is ineligible. In
+                    # prefix-only protocol mode, the opening marker plus the
+                    # normal stability/streaming checks is sufficient.
                     candidate_seen = False
                     last_identity = None
                     last_text = ""
