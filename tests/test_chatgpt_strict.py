@@ -70,6 +70,20 @@ class StrictChatGPTExtractorTests(unittest.TestCase):
         )
         self.assertNotIn("document.body.innerText", CHATGPT_GET_TURN_STATE_JS)
 
+    def test_user_turn_prefers_message_body_over_role_wrapper(self):
+        self.assertIn(
+            "role.querySelector('.whitespace-pre-wrap')",
+            CHATGPT_GET_TURN_STATE_JS,
+        )
+        self.assertIn(
+            "role.querySelector('[class*=\"whitespace-pre-wrap\"]')",
+            CHATGPT_GET_TURN_STATE_JS,
+        )
+        self.assertIn(
+            "role.querySelector('[class*=\"break-words\"]')",
+            CHATGPT_GET_TURN_STATE_JS,
+        )
+
     def test_mixed_turn_structures_are_merged_in_dom_order(self):
         for script in (
             CHATGPT_GET_RESPONSE_JS,
