@@ -5,6 +5,8 @@ import threading
 import time
 import unittest
 from pathlib import Path
+
+import websocket
 from unittest import mock
 
 from parley import cli, core
@@ -189,6 +191,39 @@ class LiveBrowserProductionTests(unittest.TestCase):
 
         self.assertEqual(len(results), 2)
         self.assertEqual(fake.max_active_transactions, 1)
+
+    def test_live_command_can_wait_without_deadline_until_stopped(self):
+        class NoResponseSocket(FakeBrowserWebSocket):
+            def send(self, payload):
+                self.sent.append(json.loads(payload))
+
+            def recv(self):
+                raise websocket.WebSocketTimeoutException()
+
+        fake = NoResponseSocket()
+        manager = LiveBrowserManager(
+            endpoint_fn=lambda: "ws://127.0.0.1:9222/devtools/browser/test"
+        )
+        checks = {"count": 0}
+
+        def should_stop():
+            checks["count"] += 1
+            return checks["count"] >= 4
+
+        with mock.patch(
+            "parley.live_browser.websocket.create_connection",
+            return_value=fake,
+        ):
+            result = manager.command(
+                "Runtime.evaluate",
+                {"expression": "1"},
+                timeout=None,
+                should_stop=should_stop,
+            )
+
+        self.assertEqual(result, {"error": "stopped"})
+        self.assertGreaterEqual(checks["count"], 4)
+        self.assertEqual(fake.timeout, 0.25)
 
     def test_live_connection_routes_command_through_session(self):
         fake = FakeBrowserWebSocket()
