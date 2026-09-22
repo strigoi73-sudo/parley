@@ -762,60 +762,17 @@ def send_and_wait(tab_id, text, wait_timeout_ms=60000, silence_ms=1500):
 
 
 def bridge(tab_from, tab_to, rounds=3):
-    """Relay a conversation: read from tab_from, send to tab_to, wait, repeat."""
-    results = []
+    """Run a true bidirectional ChatGPT relay.
 
-    for i in range(rounds):
-        round_result = {"round": i}
+    Compatibility wrapper around parley.relay.run_bidirectional_relay.
+    One round is one complete A -> B -> A exchange.
+    """
+    from .relay import run_bidirectional_relay
 
-        ws_from = cdp_connect(tab_from)
-        if not ws_from:
-            round_result["error"] = "cannot connect to source"
-            results.append(round_result)
-            break
-
-        try:
-            initial = cdp_send(ws_from, "Runtime.evaluate", {
-                "expression": _response_js(tab_from),
-                "returnByValue": True,
-            })
-
-            source_text = ""
-            has_streaming = False
-            has_stop = False
-
-            if "result" in initial and "value" in initial["result"]:
-                val = initial["result"]["value"]
-                source_text = val.get("text", "")
-                has_streaming = val.get("hasStreaming", False)
-                has_stop = val.get("hasStopButton", False)
-
-            if has_streaming or has_stop:
-                observer_js = make_mutation_observer_js(60000, 1500)
-                wait_result = cdp_send(ws_from, "Runtime.evaluate", {
-                    "expression": observer_js,
-                    "returnByValue": True,
-                    "awaitPromise": True,
-                }, timeout=65)
-                if "result" in wait_result and "value" in wait_result["result"]:
-                    val = wait_result["result"]["value"]
-                    source_text = val.get("text", source_text)
-
-            if not source_text:
-                round_result["error"] = "no text found in source"
-                results.append(round_result)
-                break
-
-            round_result["source_chars"] = len(source_text)
-            round_result["source_preview"] = source_text[:200]
-        finally:
-            try:
-                ws_from.close()
-            except Exception:
-                pass
-
-        round_result_send = send_and_wait(tab_to, source_text[:8000])
-        round_result.update(round_result_send)
-        results.append(round_result)
-
-    return results
+    return run_bidirectional_relay(
+        tab_from,
+        tab_to,
+        rounds,
+        read_response=read_response,
+        send_and_wait=send_and_wait,
+    )
