@@ -276,8 +276,342 @@ def poll(tab_id, interval_ms=2000, max_iters=60):
             pass
 
 
-def send_and_wait(tab_id, text, wait_timeout_ms=60000, silence_ms=1500):
-    """Send text to a tab and wait for the full NEW response. Returns a result dict."""
+def _runtime_value(result):
+    """Extract Runtime.evaluate returnByValue payload, or None."""
+    if not isinstance(result, dict):
+        return None
+    inner = result.get("result")
+    if isinstance(inner, dict):
+        return inner.get("value")
+    return None
+
+
+def _chatgpt_eval(ws, expression):
+    """Evaluate strict ChatGPT JS on an existing target connection."""
+    raw = cdp_send(ws, "Runtime.evaluate", {
+        "expression": expression,
+        "returnByValue": True,
+    })
+    value = _runtime_value(raw)
+    if not isinstance(value, dict):
+        return {
+            "ok": False,
+            "error": "chatgpt_runtime_value_unavailable",
+            "detail": raw,
+        }
+    return value
+
+
+def _chatgpt_state(ws, adapter):
+    """Read deterministic ChatGPT turn state on the existing connection."""
+    state = _chatgpt_eval(ws, adapter.turn_state_js)
+    if not state.get("ok"):
+        return state
+    if "assistant_count" not in state or "user_count" not in state:
+        return {
+            "ok": False,
+            "error": "chatgpt_turn_state_incomplete",
+        }
+    return state
+
+
+def _chatgpt_has_new_assistant(pre_state, current_state):
+    """Return True only when a newer assistant turn can be proven."""
+    current = current_state.get("assistant")
+    if not current:
+        return False
+
+    pre_count = int(pre_state.get("assistant_count", 0) or 0)
+    current_count = int(current_state.get("assistant_count", 0) or 0)
+    if current_count > pre_count:
+        return True
+
+    previous = pre_state.get("assistant")
+    if previous is None and current is not None:
+        return True
+
+    if previous and current:
+        previous_id = previous.get("turn_id")
+        current_id = current.get("turn_id")
+        if previous_id and current_id and previous_id != current_id:
+            return True
+
+    return False
+
+
+def _chatgpt_send_and_wait(
+    tab_id,
+    text,
+    wait_timeout_ms=60000,
+    silence_ms=1500,
+    adapter=None,
+):
+    """Strict ChatGPT send/wait transaction using one target connection.
+
+    Invariants:
+    - one target connection from snapshot through completion;
+    - submission must be proven by a newer user turn;
+    - response must be proven to be a newer assistant turn;
+    - only that assistant turn may satisfy completion;
+    - ambiguous or changing turn identity fails closed.
+    """
+    if adapter is None:
+        adapter = _adapter_for_tab(tab_id)
+    if adapter is None or adapter.name != "chatgpt":
+        return {
+            "error": "chatgpt_adapter_required",
+            "response_complete": False,
+        }
+
+    started = time.monotonic()
+    deadline = started + (wait_timeout_ms / 1000.0)
+
+    ws = cdp_connect(tab_id)
+    if not ws:
+        return {
+            "error": "cannot_connect_to_tab",
+            "stage": "connect",
+            "response_complete": False,
+        }
+
+    def fail(error, stage, **extra):
+        result = {
+            "error": error,
+            "stage": stage,
+            "response_complete": False,
+            "response_duration_ms": int(
+                (time.monotonic() - started) * 1000
+            ),
+        }
+        result.update(extra)
+        return result
+
+    try:
+        pre_state = _chatgpt_state(ws, adapter)
+        if not pre_state.get("ok"):
+            return fail(
+                pre_state.get("error", "chatgpt_snapshot_failed"),
+                "snapshot",
+                detail=pre_state,
+            )
+
+        pre_assistant_count = int(
+            pre_state.get("assistant_count", 0) or 0
+        )
+        pre_user_count = int(pre_state.get("user_count", 0) or 0)
+
+        prepare = _chatgpt_eval(ws, adapter.prepare_composer_js)
+        if not prepare.get("ok"):
+            return fail(
+                prepare.get("error", "chatgpt_composer_prepare_failed"),
+                "prepare",
+                detail=prepare,
+            )
+
+        insert_result = cdp_send(ws, "Input.insertText", {"text": text})
+        if (
+            not isinstance(insert_result, dict)
+            or insert_result.get("error")
+            or ("code" in insert_result and "message" in insert_result)
+        ):
+            return fail(
+                "chatgpt_insert_text_failed",
+                "insert",
+                detail=insert_result,
+            )
+
+        # Give React enough time to enable the send button after insertText.
+        time.sleep(0.2)
+
+        click = _chatgpt_eval(ws, adapter.click_send_js)
+        if not click.get("ok"):
+            return fail(
+                click.get("error", "chatgpt_send_failed"),
+                "submit",
+                detail=click,
+            )
+
+        # Submission is not considered successful until ChatGPT's DOM proves a
+        # newer user turn exists.
+        submitted_state = None
+        submission_deadline = min(deadline, time.monotonic() + 10.0)
+        while time.monotonic() < submission_deadline:
+            state = _chatgpt_state(ws, adapter)
+            if not state.get("ok"):
+                return fail(
+                    state.get("error", "chatgpt_state_failed"),
+                    "verify_submission",
+                    detail=state,
+                )
+            if int(state.get("user_count", 0) or 0) > pre_user_count:
+                submitted_state = state
+                break
+            time.sleep(0.1)
+
+        if submitted_state is None:
+            return fail(
+                "chatgpt_submission_not_verified",
+                "verify_submission",
+                pre_user_count=pre_user_count,
+            )
+
+        # Now require a provably newer assistant turn.
+        response_state = None
+        while time.monotonic() < deadline:
+            state = _chatgpt_state(ws, adapter)
+            if not state.get("ok"):
+                return fail(
+                    state.get("error", "chatgpt_state_failed"),
+                    "wait_for_response",
+                    detail=state,
+                )
+            if _chatgpt_has_new_assistant(pre_state, state):
+                response_state = state
+                break
+            time.sleep(0.2)
+
+        if response_state is None:
+            return fail(
+                "chatgpt_new_assistant_turn_timeout",
+                "wait_for_response",
+                pre_assistant_count=pre_assistant_count,
+                post_user_count=int(
+                    submitted_state.get("user_count", 0) or 0
+                ),
+            )
+
+        target = response_state.get("assistant") or {}
+        target_turn_id = target.get("turn_id")
+        target_turn_index = target.get("turn_index")
+        target_assistant_count = int(
+            response_state.get("assistant_count", 0) or 0
+        )
+
+        last_text = (target.get("text") or "").strip()
+        last_change = time.monotonic()
+
+        while time.monotonic() < deadline:
+            state = _chatgpt_state(ws, adapter)
+            if not state.get("ok"):
+                return fail(
+                    state.get("error", "chatgpt_state_failed"),
+                    "track_response",
+                    response_text=last_text,
+                    detail=state,
+                )
+
+            current = state.get("assistant")
+            if not current:
+                return fail(
+                    "chatgpt_assistant_turn_disappeared",
+                    "track_response",
+                    response_text=last_text,
+                )
+
+            current_count = int(
+                state.get("assistant_count", 0) or 0
+            )
+            if current_count > target_assistant_count:
+                return fail(
+                    "chatgpt_unexpected_newer_assistant_turn",
+                    "track_response",
+                    response_text=last_text,
+                    expected_assistant_count=target_assistant_count,
+                    current_assistant_count=current_count,
+                )
+
+            current_turn_id = current.get("turn_id")
+            current_turn_index = current.get("turn_index")
+
+            if (
+                target_turn_id
+                and current_turn_id
+                and current_turn_id != target_turn_id
+            ):
+                return fail(
+                    "chatgpt_assistant_turn_changed",
+                    "track_response",
+                    response_text=last_text,
+                )
+
+            if (
+                not target_turn_id
+                and current_turn_index != target_turn_index
+            ):
+                return fail(
+                    "chatgpt_assistant_turn_index_changed",
+                    "track_response",
+                    response_text=last_text,
+                )
+
+            current_text = (current.get("text") or "").strip()
+            now = time.monotonic()
+
+            if current_text != last_text:
+                last_text = current_text
+                last_change = now
+
+            streaming = bool(
+                current.get("hasStreaming")
+                or state.get("hasStopButton")
+            )
+            stable_ms = int((now - last_change) * 1000)
+
+            if (
+                last_text
+                and not streaming
+                and stable_ms >= silence_ms
+            ):
+                return {
+                    "pre_msg_count": pre_assistant_count,
+                    "pre_user_count": pre_user_count,
+                    "post_user_count": int(
+                        state.get("user_count", 0) or 0
+                    ),
+                    "send_method": click.get(
+                        "method",
+                        "chatgpt-send-button",
+                    ),
+                    "sent_chars": len(text),
+                    "response_text": last_text,
+                    "response_complete": True,
+                    "response_turn_id": current_turn_id,
+                    "response_turn_index": current_turn_index,
+                    "response_source": "chatgpt-strict",
+                    "response_duration_ms": int(
+                        (now - started) * 1000
+                    ),
+                }
+
+            time.sleep(0.2)
+
+        return fail(
+            "chatgpt_response_completion_timeout",
+            "track_response",
+            response_text=last_text,
+            response_turn_id=target_turn_id,
+            response_turn_index=target_turn_index,
+            pre_msg_count=pre_assistant_count,
+            pre_user_count=pre_user_count,
+            post_user_count=int(
+                response_state.get("user_count", 0) or 0
+            ),
+        )
+
+    finally:
+        try:
+            ws.close()
+        except Exception:
+            pass
+
+
+def _legacy_send_and_wait(
+    tab_id,
+    text,
+    wait_timeout_ms=60000,
+    silence_ms=1500,
+):
+    """Inherited multi-site send/wait path for non-ChatGPT adapters."""
     result = {}
 
     ws_pre = cdp_connect(tab_id)
@@ -317,7 +651,7 @@ def send_and_wait(tab_id, text, wait_timeout_ms=60000, silence_ms=1500):
         except Exception:
             pass
 
-    time.sleep(1)  # Brief pause for response to start
+    time.sleep(1)
 
     ws_wait = cdp_connect(tab_id)
     if not ws_wait:
@@ -325,8 +659,7 @@ def send_and_wait(tab_id, text, wait_timeout_ms=60000, silence_ms=1500):
 
     try:
         max_wait = wait_timeout_ms // 1000
-        found_new = False
-        for _ in range(max_wait * 2):  # Check every 500ms
+        for _ in range(max_wait * 2):
             count_result = cdp_send(ws_wait, "Runtime.evaluate", {
                 "expression": _message_count_js(tab_id),
                 "returnByValue": True,
@@ -336,7 +669,6 @@ def send_and_wait(tab_id, text, wait_timeout_ms=60000, silence_ms=1500):
                 current_count = count_result["result"]["value"].get("count", 0)
 
             if current_count > pre_count:
-                found_new = True
                 break
 
             check = cdp_send(ws_wait, "Runtime.evaluate", {
@@ -346,18 +678,19 @@ def send_and_wait(tab_id, text, wait_timeout_ms=60000, silence_ms=1500):
             if "result" in check and "value" in check["result"]:
                 val = check["result"]["value"]
                 if val.get("hasStreaming") or val.get("hasStopButton"):
-                    found_new = True
                     break
                 new_text = val.get("text", "")
                 if new_text and new_text.strip() != prev_text.strip():
-                    found_new = True
                     break
 
             time.sleep(0.5)
 
-        # Wait for streaming to finish. initial_msg_count=0 skips Phase 1;
-        # prev_text makes the observer ignore the pre-send response.
-        observer_js = make_mutation_observer_js(wait_timeout_ms, silence_ms, initial_msg_count=0, prev_text=prev_text)
+        observer_js = make_mutation_observer_js(
+            wait_timeout_ms,
+            silence_ms,
+            initial_msg_count=0,
+            prev_text=prev_text,
+        )
         wait_result = cdp_send(ws_wait, "Runtime.evaluate", {
             "expression": observer_js,
             "returnByValue": True,
@@ -370,7 +703,10 @@ def send_and_wait(tab_id, text, wait_timeout_ms=60000, silence_ms=1500):
             result["response_duration_ms"] = val.get("duration", 0)
             result["response_complete"] = val.get("done", False)
             if not result["response_text"]:
-                result["note"] = "empty response (target may be rate-limited or not logged in)"
+                result["note"] = (
+                    "empty response "
+                    "(target may be rate-limited or not logged in)"
+                )
         else:
             final = cdp_send(ws_wait, "Runtime.evaluate", {
                 "expression": _response_js(tab_id),
@@ -382,7 +718,10 @@ def send_and_wait(tab_id, text, wait_timeout_ms=60000, silence_ms=1500):
             result["response_text"] = final_text
             result["response_complete"] = bool(final_text)
             if not final_text:
-                result["note"] = "empty response (target may be rate-limited or not logged in)"
+                result["note"] = (
+                    "empty response "
+                    "(target may be rate-limited or not logged in)"
+                )
     finally:
         try:
             ws_wait.close()
@@ -390,6 +729,36 @@ def send_and_wait(tab_id, text, wait_timeout_ms=60000, silence_ms=1500):
             pass
 
     return result
+
+
+def send_and_wait(tab_id, text, wait_timeout_ms=60000, silence_ms=1500):
+    """Send text and wait for a new completed response.
+
+    ChatGPT uses the strict one-connection transaction path. Other adapters
+    retain the inherited behavior until they are deliberately migrated.
+    """
+    adapter = _adapter_for_tab(tab_id)
+    if adapter is None:
+        return {
+            "error": "tab_url_unavailable",
+            "response_complete": False,
+        }
+
+    if adapter.name == "chatgpt":
+        return _chatgpt_send_and_wait(
+            tab_id,
+            text,
+            wait_timeout_ms=wait_timeout_ms,
+            silence_ms=silence_ms,
+            adapter=adapter,
+        )
+
+    return _legacy_send_and_wait(
+        tab_id,
+        text,
+        wait_timeout_ms=wait_timeout_ms,
+        silence_ms=silence_ms,
+    )
 
 
 def bridge(tab_from, tab_to, rounds=3):

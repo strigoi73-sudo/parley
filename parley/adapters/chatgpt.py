@@ -1,7 +1,13 @@
 """ChatGPT (chatgpt.com / chat.openai.com) site adapter."""
 
 from .base import SiteAdapter
-from .chatgpt_strict import CHATGPT_GET_MSG_COUNT_JS, CHATGPT_GET_RESPONSE_JS
+from .chatgpt_strict import (
+    CHATGPT_CLICK_SEND_JS,
+    CHATGPT_GET_MSG_COUNT_JS,
+    CHATGPT_GET_RESPONSE_JS,
+    CHATGPT_GET_TURN_STATE_JS,
+    CHATGPT_PREPARE_COMPOSER_JS,
+)
 
 
 class ChatGPTAdapter(SiteAdapter):
@@ -19,3 +25,6 @@ class ChatGPTAdapter(SiteAdapter):
     # rather than the universal response detector's generic page-text fallback.
     response_js = CHATGPT_GET_RESPONSE_JS
     message_count_js = CHATGPT_GET_MSG_COUNT_JS
+    turn_state_js = CHATGPT_GET_TURN_STATE_JS
+    prepare_composer_js = CHATGPT_PREPARE_COMPOSER_JS
+    click_send_js = CHATGPT_CLICK_SEND_JS
