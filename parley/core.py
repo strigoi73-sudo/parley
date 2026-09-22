@@ -126,12 +126,14 @@ def cdp_send(
     """Send one CDP command, optionally without an overall deadline."""
     command = getattr(ws, "command", None)
     if callable(command):
-        return command(
-            method,
-            params,
-            timeout=timeout,
-            should_stop=should_stop,
-        )
+        if callable(should_stop):
+            return command(
+                method,
+                params,
+                timeout=timeout,
+                should_stop=should_stop,
+            )
+        return command(method, params, timeout=timeout)
 
     msg_id = int(time.time() * 1000) % 100000
     msg = {"id": msg_id, "method": method}
