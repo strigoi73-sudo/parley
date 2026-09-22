@@ -187,6 +187,52 @@ class ChatGPTSendAndWaitTests(unittest.TestCase):
         )
         self.assertEqual(result["stage"], "wait_for_response")
 
+    def test_same_user_id_with_exact_new_text_still_proves_submission(self):
+        pre = {
+            "ok": True,
+            "source": "chatgpt-strict",
+            "assistant_count": 1,
+            "user_count": 1,
+            "assistant": {
+                "text": "old reply",
+                "turn_id": "assistant-old",
+                "turn_index": 0,
+                "hasStreaming": False,
+            },
+            "user": {
+                "text": "old prompt",
+                "turn_id": "user-reused",
+                "turn_index": 0,
+            },
+            "hasStopButton": False,
+        }
+        submitted = {
+            **pre,
+            "user": {
+                "text": "hello",
+                "turn_id": "user-reused",
+                "turn_index": 0,
+            },
+        }
+        reply = {
+            **submitted,
+            "assistant_count": 2,
+            "assistant": {
+                "text": "new reply",
+                "turn_id": "assistant-new",
+                "turn_index": 1,
+                "hasStreaming": False,
+            },
+        }
+
+        result, _, _, _ = self.run_transaction(
+            [pre, submitted, reply, reply, reply],
+            silence_ms=200,
+        )
+
+        self.assertTrue(result["response_complete"])
+        self.assertEqual(result["response_text"], "new reply")
+
     def test_submission_must_be_proven_by_new_user_turn(self):
         pre = {
             "ok": True,
