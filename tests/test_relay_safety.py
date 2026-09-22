@@ -315,6 +315,38 @@ class RelaySafetyTests(unittest.TestCase):
                 control.stop()
                 thread.join(timeout=1)
 
+    def test_round_limit_wait_wakes_for_reset_request(self):
+        control = RelayControl(
+            round_limit=1,
+            confirm_round_limit=True,
+        )
+        holder = {}
+
+        def wait():
+            holder["decision"] = control.wait_for_round_limit_decision(1)
+
+        thread = threading.Thread(target=wait, daemon=True)
+        thread.start()
+
+        try:
+            deadline = time.monotonic() + 2
+            while (
+                not control.awaiting_round_extension
+                and time.monotonic() < deadline
+            ):
+                time.sleep(0.01)
+
+            self.assertTrue(control.awaiting_round_extension)
+            control.request_reset("B")
+            thread.join(timeout=2)
+
+            self.assertFalse(thread.is_alive())
+            self.assertEqual(holder["decision"], "reset:B")
+        finally:
+            if thread.is_alive():
+                control.stop()
+                thread.join(timeout=1)
+
     def test_interactive_round_limit_extension_resumes_same_relay(self):
         control = RelayControl(
             round_limit=1,
