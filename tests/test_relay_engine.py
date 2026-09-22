@@ -323,54 +323,27 @@ class BidirectionalRelayTests(unittest.TestCase):
             "A REPLY END",
         )
 
-    def test_marked_initial_a_reply_supports_prefix_only_protocol(self):
-        calls = []
-
-        def send_and_wait(tab_id, text, **kwargs):
-            calls.append((tab_id, text, kwargs))
-            if tab_id == "B":
-                self.assertEqual(
-                    kwargs.get("expected_reply_prefix"),
-                    "B REPLY:",
-                )
-                self.assertIsNone(
-                    kwargs.get("expected_reply_suffix"),
-                )
-                return completed_reply(
-                    "B REPLY: response from B",
-                    "b1",
-                    0,
-                )
-
-            self.assertEqual(
-                kwargs.get("expected_reply_prefix"),
-                "A REPLY:",
-            )
-            self.assertIsNone(
-                kwargs.get("expected_reply_suffix"),
-            )
-            return completed_reply(
-                "A REPLY: response from A",
-                "a2",
-                1,
-            )
-
+    def test_marked_initial_a_reply_requires_terminal_marker(self):
+        send = mock.Mock()
         result = run_bidirectional_relay(
             "A",
             "B",
             1,
             read_response=lambda _: strict_turn(
-                "A REPLY: starting answer",
+                "A REPLY: incomplete starting answer",
                 "a1",
                 0,
             ),
-            send_and_wait=send_and_wait,
+            send_and_wait=send,
         )
 
-        self.assertEqual(result["status"], "complete")
-        self.assertTrue(result["test_protocol"])
-        self.assertFalse(result["test_protocol_terminal_markers"])
-        self.assertEqual(len(calls), 2)
+        send.assert_not_called()
+        self.assertEqual(result["status"], "error")
+        self.assertEqual(
+            result["error"],
+            "initial_test_reply_end_marker_missing",
+        )
+        self.assertEqual(result["stage"], "read_a")
 
     def test_test_protocol_reset_reply_stops_relay_cleanly(self):
         def send_and_wait(tab_id, text, **kwargs):
