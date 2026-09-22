@@ -644,6 +644,70 @@ class BidirectionalRelayTests(unittest.TestCase):
         self.assertEqual(result["restart_point"], "A")
         self.assertEqual(len(result["transfers"]), 0)
 
+    def test_round_limit_reset_decision_coordinates_and_stops(self):
+        class ResetAtLimitControl:
+            state = "running"
+            round_limit = 1
+
+            def wait_until_runnable(self):
+                return True
+
+            def wait_for_round_limit_decision(self, completed_rounds):
+                self.completed_rounds = completed_rounds
+                return "reset:B"
+
+        control = ResetAtLimitControl()
+        calls = []
+
+        def send_and_wait(tab_id, text, **kwargs):
+            calls.append((tab_id, text, kwargs))
+            if len(calls) == 1:
+                return completed_reply(
+                    "B REPLY: response from B\n\nB REPLY END",
+                    "b1",
+                    0,
+                )
+            if len(calls) == 2:
+                return completed_reply(
+                    "A REPLY: response from A\n\nA REPLY END",
+                    "a2",
+                    1,
+                )
+
+            self.assertEqual(tab_id, "A")
+            self.assertEqual(text, "RESET CHAT")
+            return completed_reply("RESET CHAT", "a-reset", 2)
+
+        result = run_bidirectional_relay(
+            "A",
+            "B",
+            1,
+            read_response=lambda tab_id: (
+                strict_turn(
+                    "A REPLY: starting answer\n\nA REPLY END",
+                    "a1",
+                    0,
+                )
+                if tab_id == "A"
+                else strict_turn(
+                    "B REPLY: response from B\n\nB REPLY END",
+                    "b1",
+                    0,
+                )
+            ),
+            send_and_wait=send_and_wait,
+            control=control,
+        )
+
+        self.assertEqual(control.completed_rounds, 1)
+        self.assertEqual(result["status"], "stopped")
+        self.assertEqual(result["reset_by"], "B")
+        self.assertEqual(result["reset_acknowledged_by"], "A")
+        self.assertTrue(result["reset_propagated"])
+        self.assertEqual(result["rounds_completed"], 1)
+        self.assertEqual(len(result["transfers"]), 2)
+        self.assertEqual(len(calls), 3)
+
     def test_workflows_bridge_delegates_to_relay_engine(self):
         with mock.patch(
             "parley.relay.run_bidirectional_relay",
