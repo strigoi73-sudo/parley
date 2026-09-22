@@ -32,24 +32,52 @@ from .adapters.js import (
 )
 
 
+_UNKNOWN_TAB_RESPONSE_JS = """
+(() => ({
+    ok: false,
+    error: 'tab_url_unavailable',
+    text: '',
+    count: 0,
+    source: 'fail-closed'
+}))()
+"""
+
+_UNKNOWN_TAB_COUNT_JS = """
+(() => ({
+    ok: false,
+    error: 'tab_url_unavailable',
+    count: 0,
+    source: 'fail-closed'
+}))()
+"""
+
+
 def _adapter_for_tab(tab_id):
-    """Return the registered site adapter for the tab's current URL."""
-    return detect(core.tab_url(tab_id))
+    """Return the registered site adapter, or None if tab identity is unknown."""
+    url = core.tab_url(tab_id)
+    if not url:
+        return None
+    return detect(url)
 
 
 def _response_js(tab_id):
     """Return the site-specific response extractor for this tab.
 
-    ChatGPT supplies a fail-closed extractor. Other adapters currently fall
-    back to the inherited universal detector.
+    ChatGPT supplies a fail-closed extractor. A tab whose URL cannot be
+    resolved also fails closed. Other known sites currently retain the
+    inherited universal detector.
     """
     adapter = _adapter_for_tab(tab_id)
+    if adapter is None:
+        return _UNKNOWN_TAB_RESPONSE_JS
     return getattr(adapter, "response_js", UNIVERSAL_GET_RESPONSE)
 
 
 def _message_count_js(tab_id):
     """Return the site-specific assistant-message counter for this tab."""
     adapter = _adapter_for_tab(tab_id)
+    if adapter is None:
+        return _UNKNOWN_TAB_COUNT_JS
     return getattr(adapter, "message_count_js", UNIVERSAL_GET_MSG_COUNT)
 
 
