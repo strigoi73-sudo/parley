@@ -114,7 +114,9 @@ class RelayControl:
                     self._awaiting_round_extension = False
                     return "finish"
 
-                self._condition.wait(timeout=0.1)
+                # Human round-limit decisions have no deadline.
+                # Wake only when extend/finish/stop changes the condition.
+                self._condition.wait()
 
     def pause(self):
         with self._condition:
