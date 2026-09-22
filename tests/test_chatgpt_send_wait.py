@@ -348,6 +348,84 @@ class ChatGPTSendAndWaitTests(unittest.TestCase):
         self.assertEqual(result["response_turn_index"], 1)
         self.assertEqual(result["response_candidate_replacements"], 1)
 
+    def test_exact_reset_message_interrupts_marked_response_cleanly(self):
+        old = {
+            "ok": True,
+            "source": "chatgpt-strict",
+            "assistant_count": 1,
+            "user_count": 1,
+            "assistant": {
+                "text": "A REPLY: old answer\n\nA REPLY END",
+                "turn_id": "assistant-old",
+                "turn_index": 0,
+                "hasStreaming": False,
+            },
+            "user": {
+                "text": "old prompt",
+                "turn_id": "user-old",
+                "turn_index": 0,
+            },
+            "hasStopButton": False,
+        }
+        submitted = {
+            **old,
+            "user_count": 2,
+            "user": {
+                "text": "hello",
+                "turn_id": "user-submitted",
+                "turn_index": 1,
+            },
+        }
+        started = {
+            **submitted,
+            "assistant_count": 2,
+            "assistant": {
+                "text": "B REPLY: partial",
+                "turn_id": "assistant-partial",
+                "turn_index": 1,
+                "hasStreaming": True,
+            },
+            "hasStopButton": True,
+        }
+        reset_user = {
+            **started,
+            "user_count": 3,
+            "user": {
+                "text": "RESET CHAT",
+                "turn_id": "user-reset",
+                "turn_index": 2,
+            },
+        }
+        reset_reply = {
+            **reset_user,
+            "assistant_count": 3,
+            "assistant": {
+                "text": "RESET CHAT",
+                "turn_id": "assistant-reset",
+                "turn_index": 2,
+                "hasStreaming": False,
+            },
+            "hasStopButton": False,
+        }
+
+        result, _, _, _ = self.run_transaction(
+            [
+                old,
+                submitted,
+                started,
+                reset_user,
+                reset_reply,
+                reset_reply,
+            ],
+            silence_ms=200,
+            expected_reply_prefix="B REPLY:",
+            expected_reply_suffix="B REPLY END",
+        )
+
+        self.assertTrue(result["response_complete"])
+        self.assertEqual(result["response_text"], "RESET CHAT")
+        self.assertTrue(result["human_reset_requested"])
+
     def test_new_user_turn_during_response_still_fails_closed(self):
         pre = {
             "ok": True,
