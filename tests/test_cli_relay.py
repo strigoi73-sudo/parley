@@ -241,6 +241,7 @@ class RelayCLITests(unittest.TestCase):
             "TAB-A",
             "Discuss whether Pluto is a planet.",
             expected_reply_prefix="A REPLY:",
+            expected_reply_suffix="A REPLY END",
         )
         session_cls.assert_called_once_with(
             cli.workflows.bridge,
