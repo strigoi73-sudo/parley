@@ -57,7 +57,13 @@ from . import core
 from . import workflows
 from .adapters.js import make_focus_and_type_js
 from .relay import RelaySession
-from .relay.engine import TEST_A_REPLY_PREFIX, TEST_A_REPLY_SUFFIX
+from .relay.engine import (
+    RESET_CHAT_COMMAND,
+    TEST_A_REPLY_PREFIX,
+    TEST_A_REPLY_SUFFIX,
+    TEST_B_REPLY_PREFIX,
+    TEST_B_REPLY_SUFFIX,
+)
 
 
 def _print(obj):
@@ -603,9 +609,38 @@ def cmd_relay(parts, input_fn=input, input_stream=None):
             return 1
 
         initial_text = (initial_result.get("response_text") or "").strip()
-        if initial_text == "RESET CHAT":
-            print("ChatGPT A returned RESET CHAT. Relay not started.")
-            return 1
+        if initial_text == RESET_CHAT_COMMAND:
+            print(
+                "ChatGPT A returned RESET CHAT. "
+                "Synchronizing reset to ChatGPT B..."
+            )
+            reset_result = workflows.send_and_wait(
+                tab_b["id"],
+                RESET_CHAT_COMMAND,
+                expected_reply_prefix=TEST_B_REPLY_PREFIX,
+                expected_reply_suffix=TEST_B_REPLY_SUFFIX,
+            )
+            reset_text = (
+                (reset_result.get("response_text") or "").strip()
+                if isinstance(reset_result, dict)
+                else ""
+            )
+            if (
+                not isinstance(reset_result, dict)
+                or reset_result.get("error")
+                or not reset_result.get("response_complete")
+                or reset_text != RESET_CHAT_COMMAND
+            ):
+                print("Could not confirm RESET CHAT from ChatGPT B.")
+                if options["json_output"]:
+                    _print(reset_result)
+                return 1
+
+            print(
+                "Reset coordinated: A -> B. "
+                "Restart point: A."
+            )
+            return 0
 
         print(
             "ChatGPT A completed the starting reply (%d chars)."
