@@ -57,7 +57,7 @@ from . import core
 from . import workflows
 from .adapters.js import make_focus_and_type_js
 from .relay import RelaySession
-from .relay.engine import TEST_A_REPLY_PREFIX
+from .relay.engine import TEST_A_REPLY_PREFIX, TEST_A_REPLY_SUFFIX
 
 
 def _print(obj):
@@ -561,6 +561,7 @@ def cmd_relay(parts, input_fn=input, input_stream=None):
             tab_a["id"],
             initial_prompt,
             expected_reply_prefix=TEST_A_REPLY_PREFIX,
+            expected_reply_suffix=TEST_A_REPLY_SUFFIX,
         )
         if (
             not isinstance(initial_result, dict)
