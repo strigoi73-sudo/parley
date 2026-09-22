@@ -1,0 +1,11 @@
+"""Relay engine states for deterministic two-tab ChatGPT exchange."""
+
+IDLE = "IDLE"
+PREPARE = "PREPARE"
+READ_A = "READ_A"
+TRANSFER_A_TO_B = "TRANSFER_A_TO_B"
+TRANSFER_B_TO_A = "TRANSFER_B_TO_A"
+COMPLETE = "COMPLETE"
+ERROR = "ERROR"
+
+TERMINAL_STATES = {COMPLETE, ERROR}

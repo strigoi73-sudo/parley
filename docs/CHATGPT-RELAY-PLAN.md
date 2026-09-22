@@ -622,6 +622,8 @@ Acceptance:
 
 ### Phase 4 — Bidirectional relay engine
 
+Status: **Complete and locally verified (milestone verification passed on 2026-09-22)**
+
 Deliverables:
 
 - explicit A/B relay state machine;
@@ -695,21 +697,9 @@ Do not prioritize:
 
 ## 16. Immediate Next Step
 
-Create a fresh implementation branch from `main`, for example:
+Phase 4 is implemented on `feature/bidirectional-relay` and awaits local milestone verification with `scripts/verify-phase4.ps1`.
 
-```text
-feature/chatgpt-relay-core
-```
-
-The first code change on that branch should be **strict ChatGPT turn extraction**, with tests written before or alongside the implementation.
-
-Do not modify bridge semantics until the ChatGPT adapter can reliably:
-
-1. identify completed assistant turns;
-2. extract only the assistant message body;
-3. reject unrelated ChatGPT page text.
-
-After that passes, implement the reliable `send_and_wait()` contract, then the bidirectional relay state machine.
+After Phase 4 passes, proceed to **Phase 5: Safety and resilience**. Keep that work separate from the already-verified relay sequencing.
 
 ---
 
@@ -721,6 +711,6 @@ If work resumes in a future session, start here:
 2. Treat `main` as the inherited baseline.
 3. Treat `test/upstream-bridge-live` as the preserved empirical baseline showing the original bridge defects.
 4. Do not assume `feature/live-browser-attach` should be merged wholesale; it is an experimental source of proven ideas.
-5. Continue with **Phase 4: Bidirectional relay engine** unless newer work in the repository supersedes this document.
+5. Continue with **Phase 5: Safety and resilience** unless newer work in the repository supersedes this document.
 6. Before changing architecture, verify whether a newer planning document or merged implementation has replaced this one.
 

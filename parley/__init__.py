@@ -11,5 +11,6 @@ __version__ = "1.1.0"
 from . import core
 from . import workflows
 from . import adapters
+from . import relay
 
-__all__ = ["core", "workflows", "adapters", "__version__"]
+__all__ = ["core", "workflows", "adapters", "relay", "__version__"]
