@@ -258,6 +258,83 @@ class BidirectionalRelayTests(unittest.TestCase):
                 "relay_rounds_must_be_positive_integer",
             )
 
+    def test_marked_a_reply_activates_test_protocol_and_expected_markers(self):
+        calls = []
+
+        def send_and_wait(tab_id, text, **kwargs):
+            calls.append((tab_id, text, kwargs))
+            if tab_id == "B":
+                self.assertEqual(
+                    kwargs.get("expected_reply_prefix"),
+                    "B REPLY:",
+                )
+                return completed_reply(
+                    "B REPLY: response from B",
+                    "b1",
+                    0,
+                )
+            self.assertEqual(
+                kwargs.get("expected_reply_prefix"),
+                "A REPLY:",
+            )
+            return completed_reply(
+                "A REPLY: response from A",
+                "a2",
+                1,
+            )
+
+        result = run_bidirectional_relay(
+            "A",
+            "B",
+            1,
+            read_response=lambda _: strict_turn(
+                "A REPLY: starting answer",
+                "a1",
+                0,
+            ),
+            send_and_wait=send_and_wait,
+        )
+
+        self.assertEqual(result["status"], "complete")
+        self.assertTrue(result["test_protocol"])
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(
+            calls[0][2]["expected_reply_prefix"],
+            "B REPLY:",
+        )
+        self.assertEqual(
+            calls[1][2]["expected_reply_prefix"],
+            "A REPLY:",
+        )
+
+    def test_test_protocol_reset_reply_stops_relay_cleanly(self):
+        def send_and_wait(tab_id, text, **kwargs):
+            self.assertEqual(tab_id, "B")
+            self.assertEqual(
+                kwargs.get("expected_reply_prefix"),
+                "B REPLY:",
+            )
+            return completed_reply("RESET CHAT", "b-reset", 0)
+
+        result = run_bidirectional_relay(
+            "A",
+            "B",
+            1,
+            read_response=lambda _: strict_turn(
+                "A REPLY: starting answer",
+                "a1",
+                0,
+            ),
+            send_and_wait=send_and_wait,
+        )
+
+        self.assertEqual(result["status"], "stopped")
+        self.assertTrue(result["reset_requested"])
+        self.assertEqual(result["reset_by"], "B")
+        self.assertEqual(result["stage"], "a_to_b")
+        self.assertEqual(result["rounds_completed"], 0)
+        self.assertEqual(len(result["transfers"]), 0)
+
     def test_workflows_bridge_delegates_to_relay_engine(self):
         with mock.patch(
             "parley.relay.run_bidirectional_relay",
