@@ -43,6 +43,7 @@ class RelayCLITests(unittest.TestCase):
             {"id": "A", "url": "https://chatgpt.com/c/a"},
             {"id": "B", "url": "https://chat.openai.com/c/b"},
             {"id": "X", "url": "https://example.com/"},
+            {"id": "BAD", "url": "https://chatgpt.com.evil.example/c/x"},
         ]
         with mock.patch.object(
             cli.core,
@@ -207,6 +208,32 @@ class RelaySessionTests(unittest.TestCase):
             status["last_transfer"]["direction"],
             "A->B",
         )
+
+    def test_session_tracks_completed_rounds_from_b_to_a_event(self):
+        session = RelaySession(
+            mock.Mock(),
+            "A",
+            "B",
+            3,
+        )
+        session._on_event({
+            "event": "transfer_completed",
+            "round": 1,
+            "direction": "A->B",
+            "source_chars": 2,
+            "response_chars": 2,
+        })
+        session._on_event({
+            "event": "transfer_completed",
+            "round": 1,
+            "direction": "B->A",
+            "source_chars": 2,
+            "response_chars": 2,
+        })
+
+        status = session.status()
+        self.assertEqual(status["rounds_completed"], 1)
+        self.assertEqual(status["transfers_completed"], 2)
 
     def test_session_control_methods_delegate(self):
         session = RelaySession(
