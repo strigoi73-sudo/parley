@@ -159,9 +159,7 @@ debugging server enabled explicitly.
 3. In PowerShell, from the Parley repo:
 
 ```powershell
-$env:PARLEY_CONNECTION_MODE = "live"
-$env:PARLEY_CHROME_USER_DATA_DIR = "$env:LOCALAPPDATA\Google\Chrome\User Data"
-python .\parley.py list
+python .\parley.py --live list
 ```
 
 Chrome may display an authorization prompt when Parley first attaches. Approve
@@ -173,8 +171,10 @@ browser-level CDP WebSocket. It then uses `Target.getTargets` and flattened
 `Target.attachToTarget` sessions so the existing Parley workflow layer can
 operate on your current tabs without launching a second Chrome profile.
 
-Set `PARLEY_CONNECTION_MODE=classic` (or unset it) to return to the original
-`localhost:9222` behavior.
+`--live` uses the normal stable Chrome user-data location automatically. If
+your Chrome profile lives elsewhere, set `PARLEY_CHROME_USER_DATA_DIR` first.
+Use `--classic` (or omit both switches) for the original `localhost:9222`
+behavior.
 
 > **Security:** live mode attaches to your everyday browser. Only pass Parley
 > tab IDs you intend to automate, and treat the existing `cookies` command as
