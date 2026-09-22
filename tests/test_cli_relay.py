@@ -119,6 +119,34 @@ class RelayCLITests(unittest.TestCase):
         rounds = cli._select_rounds(input_fn=lambda _: next(answers))
         self.assertEqual(rounds, 3)
 
+    def test_poll_chat_reset_requests_exact_user_reset(self):
+        session = mock.Mock()
+        session.tab_a = "TAB-A"
+        session.tab_b = "TAB-B"
+
+        with mock.patch.object(
+            cli.workflows,
+            "read_turn_state",
+            side_effect=[
+                {
+                    "ok": True,
+                    "user": {
+                        "text": "ordinary message",
+                    },
+                },
+                {
+                    "ok": True,
+                    "user": {
+                        "text": "RESET CHAT",
+                    },
+                },
+            ],
+        ):
+            label = cli._poll_chat_reset(session)
+
+        self.assertEqual(label, "B")
+        session.request_reset.assert_called_once_with("B")
+
     def test_interactive_limit_prompt_accepts_yes_and_new_total(self):
         class FakeSession:
             def __init__(self):
@@ -634,10 +662,12 @@ class RelaySessionTests(unittest.TestCase):
             session.pause()
             session.resume()
             session.stop()
+            session.request_reset("B")
 
         pause.assert_called_once()
         resume.assert_called_once()
         stop.assert_called_once()
+        self.assertEqual(session.control._reset_request, "B")
 
 
 if __name__ == "__main__":
