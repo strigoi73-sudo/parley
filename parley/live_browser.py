@@ -137,7 +137,7 @@ class LiveBrowserManager:
         with self._lock:
             self._close_locked()
 
-    def _ensure_connected_locked(self, timeout=30):
+    def _ensure_connected_locked(self, timeout=None):
         if self._connected_locked():
             try:
                 self._ws.settimeout(timeout)
@@ -164,8 +164,9 @@ class LiveBrowserManager:
         method,
         params=None,
         *,
-        timeout=10,
+        timeout=None,
         session_id=None,
+        should_stop=None,
     ):
         """Send one CDP command and return its result/error payload."""
         with self._lock:
@@ -182,13 +183,24 @@ class LiveBrowserManager:
                     message["sessionId"] = session_id
 
                 ws.send(json.dumps(message))
-                ws.settimeout(timeout)
 
-                deadline = time.monotonic() + timeout
-                while time.monotonic() < deadline:
+                deadline = (
+                    None
+                    if timeout is None
+                    else time.monotonic() + timeout
+                )
+                poll_timeout = 0.25 if callable(should_stop) else timeout
+                ws.settimeout(poll_timeout)
+
+                while deadline is None or time.monotonic() < deadline:
+                    if callable(should_stop) and should_stop():
+                        return {"error": "stopped"}
+
                     try:
                         response = json.loads(ws.recv())
                     except websocket.WebSocketTimeoutException:
+                        if deadline is None:
+                            continue
                         break
 
                     if response.get("id") != msg_id:
@@ -219,7 +231,7 @@ class LiveBrowserManager:
     def target_infos(self):
         result = self.command(
             "Target.getTargets",
-            timeout=15,
+            timeout=None,
         )
         if isinstance(result, dict) and result.get("error"):
             raise RuntimeError(
@@ -228,7 +240,7 @@ class LiveBrowserManager:
             )
         return result.get("targetInfos", [])
 
-    def attach(self, target_id, timeout=30):
+    def attach(self, target_id, timeout=None):
         result = self.command(
             "Target.attachToTarget",
             {
@@ -292,7 +304,7 @@ def live_target_infos():
 class LiveTabConnection:
     """Flattened target-session handle over the shared browser manager."""
 
-    def __init__(self, tab_id, timeout=30, manager=None):
+    def __init__(self, tab_id, timeout=None, manager=None):
         self.tab_id = tab_id
         self._manager = manager or _MANAGER
         self._closed = False
@@ -302,7 +314,13 @@ class LiveTabConnection:
             timeout=timeout,
         )
 
-    def command(self, method, params=None, timeout=10):
+    def command(
+        self,
+        method,
+        params=None,
+        timeout=None,
+        should_stop=None,
+    ):
         if self._closed:
             return {"error": "live tab connection is closed"}
         return self._manager.command(
@@ -310,6 +328,7 @@ class LiveTabConnection:
             params,
             timeout=timeout,
             session_id=self.session_id,
+            should_stop=should_stop,
         )
 
     def settimeout(self, timeout):
