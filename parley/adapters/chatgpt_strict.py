@@ -9,42 +9,71 @@ CHATGPT_GET_RESPONSE_JS = """
   const isChatGPT = host === 'chatgpt.com' || host === 'www.chatgpt.com' || host === 'chat.openai.com';
   if (!isChatGPT) return {ok:false,error:'not_chatgpt_page',text:'',count:0,source:'chatgpt-strict'};
 
-  const articles = Array.from(document.querySelectorAll('article[data-turn="assistant"]'));
-  const roles = Array.from(document.querySelectorAll('[data-message-author-role="assistant"]'));
 
-  let turn = null;
-  let role = null;
-  let count = 0;
-  let selector = '';
+function collectTurns(roleName) {
+  const articleSelector = 'article[data-turn="' + roleName + '"]';
+  const roleSelector = '[data-message-author-role="' + roleName + '"]';
+  const nodes = [];
+  const seen = new Set();
 
-  if (articles.length) {
-    turn = articles[articles.length - 1];
-    role = turn.querySelector('[data-message-author-role="assistant"]');
-    count = articles.length;
-    selector = 'article[data-turn="assistant"]';
-  } else if (roles.length) {
-    role = roles[roles.length - 1];
-    turn = role.closest('article') || role;
-    count = roles.length;
-    selector = '[data-message-author-role="assistant"]';
-  } else {
+  for (const article of document.querySelectorAll(articleSelector)) {
+    nodes.push(article);
+    seen.add(article);
+  }
+
+  for (const role of document.querySelectorAll(roleSelector)) {
+    const candidate =
+      role.closest(articleSelector) ||
+      role.closest('article') ||
+      role;
+    if (!seen.has(candidate)) {
+      nodes.push(candidate);
+      seen.add(candidate);
+    }
+  }
+
+  nodes.sort((a, b) => {
+    if (a === b) return 0;
+    const pos = a.compareDocumentPosition(b);
+    if (pos & Node.DOCUMENT_POSITION_FOLLOWING) return -1;
+    if (pos & Node.DOCUMENT_POSITION_PRECEDING) return 1;
+    return 0;
+  });
+
+  return {
+    nodes: nodes,
+    articleSelector: articleSelector,
+    roleSelector: roleSelector
+  };
+}
+
+  const turns = collectTurns('assistant');
+  const count = turns.nodes.length;
+  if (!count) {
     return {ok:false,error:'chatgpt_assistant_turn_not_found',text:'',count:0,source:'chatgpt-strict'};
   }
 
+  const turn = turns.nodes[count - 1];
+  const role = turn.matches(turns.roleSelector)
+    ? turn
+    : turn.querySelector(turns.roleSelector);
+
   let content = null;
   if (role) {
-    content = role.querySelector('.markdown') || role.querySelector('.markdown-new-styling') || role;
+    content = role.querySelector('.markdown') ||
+              role.querySelector('.markdown-new-styling') ||
+              role;
   }
   if (!content && turn) {
-    content = turn.querySelector('[data-message-author-role="assistant"] .markdown') ||
+    content = turn.querySelector(turns.roleSelector + ' .markdown') ||
               turn.querySelector('.markdown') ||
               turn.querySelector('.markdown-new-styling') ||
-              turn.querySelector('[data-message-author-role="assistant"]');
+              turn.querySelector(turns.roleSelector);
   }
 
   const text = content ? (content.innerText || content.textContent || '').trim() : '';
   if (!text) {
-    return {ok:false,error:'chatgpt_message_body_not_found',text:'',count:count,source:'chatgpt-strict',selector:selector};
+    return {ok:false,error:'chatgpt_message_body_not_found',text:'',count:count,source:'chatgpt-strict',selector:'explicit-assistant-turns'};
   }
 
   const turnId =
@@ -64,7 +93,7 @@ CHATGPT_GET_RESPONSE_JS = """
     count:count,
     turn_index:count - 1,
     turn_id:turnId,
-    selector:selector,
+    selector:'explicit-assistant-turns',
     source:'chatgpt-strict',
     isLatest:true,
     hasStreaming:streaming,
@@ -73,19 +102,58 @@ CHATGPT_GET_RESPONSE_JS = """
 })()
 """
 
+
 CHATGPT_GET_MSG_COUNT_JS = """
 (() => {
   const host = (location.hostname || '').toLowerCase();
   const isChatGPT = host === 'chatgpt.com' || host === 'www.chatgpt.com' || host === 'chat.openai.com';
   if (!isChatGPT) return {ok:false,error:'not_chatgpt_page',count:0,source:'chatgpt-strict'};
 
-  const articles = document.querySelectorAll('article[data-turn="assistant"]');
-  if (articles.length) {
-    return {ok:true,count:articles.length,source:'chatgpt-strict',selector:'article[data-turn="assistant"]'};
+
+function collectTurns(roleName) {
+  const articleSelector = 'article[data-turn="' + roleName + '"]';
+  const roleSelector = '[data-message-author-role="' + roleName + '"]';
+  const nodes = [];
+  const seen = new Set();
+
+  for (const article of document.querySelectorAll(articleSelector)) {
+    nodes.push(article);
+    seen.add(article);
   }
 
-  const roles = document.querySelectorAll('[data-message-author-role="assistant"]');
-  return {ok:true,count:roles.length,source:'chatgpt-strict',selector:'[data-message-author-role="assistant"]'};
+  for (const role of document.querySelectorAll(roleSelector)) {
+    const candidate =
+      role.closest(articleSelector) ||
+      role.closest('article') ||
+      role;
+    if (!seen.has(candidate)) {
+      nodes.push(candidate);
+      seen.add(candidate);
+    }
+  }
+
+  nodes.sort((a, b) => {
+    if (a === b) return 0;
+    const pos = a.compareDocumentPosition(b);
+    if (pos & Node.DOCUMENT_POSITION_FOLLOWING) return -1;
+    if (pos & Node.DOCUMENT_POSITION_PRECEDING) return 1;
+    return 0;
+  });
+
+  return {
+    nodes: nodes,
+    articleSelector: articleSelector,
+    roleSelector: roleSelector
+  };
+}
+
+  const turns = collectTurns('assistant');
+  return {
+    ok:true,
+    count:turns.nodes.length,
+    source:'chatgpt-strict',
+    selector:'explicit-assistant-turns'
+  };
 })()
 """
 
@@ -99,30 +167,52 @@ CHATGPT_GET_TURN_STATE_JS = """
   const isChatGPT = host === 'chatgpt.com' || host === 'www.chatgpt.com' || host === 'chat.openai.com';
   if (!isChatGPT) return {ok:false,error:'not_chatgpt_page',source:'chatgpt-strict'};
 
-  const assistantArticles = Array.from(document.querySelectorAll('article[data-turn="assistant"]'));
-  const assistantRoles = Array.from(document.querySelectorAll('[data-message-author-role="assistant"]'));
-  const userArticles = Array.from(document.querySelectorAll('article[data-turn="user"]'));
-  const userRoles = Array.from(document.querySelectorAll('[data-message-author-role="user"]'));
 
-  const assistantCount = assistantArticles.length || assistantRoles.length;
-  const userCount = userArticles.length || userRoles.length;
+function collectTurns(roleName) {
+  const articleSelector = 'article[data-turn="' + roleName + '"]';
+  const roleSelector = '[data-message-author-role="' + roleName + '"]';
+  const nodes = [];
+  const seen = new Set();
 
-  function latestTurn(articles, roles, roleName, count) {
-    let turn = null;
-    let role = null;
-    let selector = '';
+  for (const article of document.querySelectorAll(articleSelector)) {
+    nodes.push(article);
+    seen.add(article);
+  }
 
-    if (articles.length) {
-      turn = articles[articles.length - 1];
-      role = turn.querySelector('[data-message-author-role="' + roleName + '"]');
-      selector = 'article[data-turn="' + roleName + '"]';
-    } else if (roles.length) {
-      role = roles[roles.length - 1];
-      turn = role.closest('article') || role;
-      selector = '[data-message-author-role="' + roleName + '"]';
-    } else {
-      return null;
+  for (const role of document.querySelectorAll(roleSelector)) {
+    const candidate =
+      role.closest(articleSelector) ||
+      role.closest('article') ||
+      role;
+    if (!seen.has(candidate)) {
+      nodes.push(candidate);
+      seen.add(candidate);
     }
+  }
+
+  nodes.sort((a, b) => {
+    if (a === b) return 0;
+    const pos = a.compareDocumentPosition(b);
+    if (pos & Node.DOCUMENT_POSITION_FOLLOWING) return -1;
+    if (pos & Node.DOCUMENT_POSITION_PRECEDING) return 1;
+    return 0;
+  });
+
+  return {
+    nodes: nodes,
+    articleSelector: articleSelector,
+    roleSelector: roleSelector
+  };
+}
+
+  function latestTurn(turns, roleName) {
+    const count = turns.nodes.length;
+    if (!count) return null;
+
+    const turn = turns.nodes[count - 1];
+    const role = turn.matches(turns.roleSelector)
+      ? turn
+      : turn.querySelector(turns.roleSelector);
 
     let content = null;
     if (roleName === 'assistant') {
@@ -132,15 +222,13 @@ CHATGPT_GET_TURN_STATE_JS = """
                   role;
       }
       if (!content && turn) {
-        content = turn.querySelector('[data-message-author-role="assistant"] .markdown') ||
+        content = turn.querySelector(turns.roleSelector + ' .markdown') ||
                   turn.querySelector('.markdown') ||
                   turn.querySelector('.markdown-new-styling') ||
-                  turn.querySelector('[data-message-author-role="assistant"]');
+                  turn.querySelector(turns.roleSelector);
       }
     } else {
-      content = role ||
-                (turn && turn.querySelector('[data-message-author-role="user"]')) ||
-                turn;
+      content = role || turn;
     }
 
     const text = content
@@ -163,7 +251,7 @@ CHATGPT_GET_TURN_STATE_JS = """
       text:text,
       turn_id:turnId,
       turn_index:count - 1,
-      selector:selector,
+      selector:'explicit-' + roleName + '-turns',
       hasStreaming: roleName === 'assistant' ? !!(
         (turn && turn.querySelector('[data-is-streaming="true"]')) ||
         (role && role.querySelector('[data-is-streaming="true"]'))
@@ -171,18 +259,10 @@ CHATGPT_GET_TURN_STATE_JS = """
     };
   }
 
-  const assistant = latestTurn(
-    assistantArticles,
-    assistantRoles,
-    'assistant',
-    assistantCount
-  );
-  const user = latestTurn(
-    userArticles,
-    userRoles,
-    'user',
-    userCount
-  );
+  const assistantTurns = collectTurns('assistant');
+  const userTurns = collectTurns('user');
+  const assistant = latestTurn(assistantTurns, 'assistant');
+  const user = latestTurn(userTurns, 'user');
 
   const stop = document.querySelector(
     'button[data-testid="stop-button"], button[aria-label*="Stop"], button[aria-label*="stop"]'
@@ -191,8 +271,8 @@ CHATGPT_GET_TURN_STATE_JS = """
   return {
     ok:true,
     source:'chatgpt-strict',
-    assistant_count:assistantCount,
-    user_count:userCount,
+    assistant_count:assistantTurns.nodes.length,
+    user_count:userTurns.nodes.length,
     assistant:assistant,
     user:user,
     hasStopButton:!!stop
