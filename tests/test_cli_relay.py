@@ -1,3 +1,4 @@
+import io
 import unittest
 from unittest import mock
 
@@ -115,6 +116,74 @@ class RelayCLITests(unittest.TestCase):
         answers = iter(["nope", "0", "3"])
         rounds = cli._select_rounds(input_fn=lambda _: next(answers))
         self.assertEqual(rounds, 3)
+
+    def test_interactive_limit_prompt_accepts_yes_and_new_total(self):
+        class FakeSession:
+            def __init__(self):
+                self.alive = True
+                self.exception = None
+                self.limit = 1
+                self.extended_to = None
+                self._result = {
+                    "status": "complete",
+                    "state": "COMPLETE",
+                    "rounds_requested": 3,
+                    "rounds_completed": 1,
+                    "transfers": [],
+                }
+
+            def start(self):
+                return self
+
+            def is_alive(self):
+                return self.alive
+
+            def status(self):
+                return {
+                    "status": "running" if self.alive else "complete",
+                    "state": "TRANSFER_B_TO_A",
+                    "control": "running",
+                    "rounds_completed": 1,
+                    "rounds_requested": self.limit,
+                    "awaiting_extension": self.alive,
+                    "transfers_completed": 0,
+                    "last_transfer": None,
+                }
+
+            def extend_rounds(self, new_total):
+                self.extended_to = new_total
+                self.limit = new_total
+                self.alive = False
+                return new_total
+
+            def finish_at_round_limit(self):
+                self.alive = False
+
+            def join(self):
+                return self._result
+
+        session = FakeSession()
+        output = io.StringIO()
+        with mock.patch("sys.stdout", output):
+            code = cli._run_interactive_relay(
+                session,
+                input_stream=io.StringIO("y\n3\n"),
+                output_json=False,
+                sleep=lambda _: None,
+            )
+
+        self.assertEqual(code, 0)
+        self.assertEqual(session.extended_to, 3)
+        rendered = output.getvalue()
+        self.assertIn(
+            "Round limit reached at 1. Extend session? [y/N]",
+            rendered,
+        )
+        self.assertIn(
+            "New total rounds (must be greater than 1):",
+            rendered,
+        )
+        self.assertIn("Round limit extended to 3.", rendered)
 
     def test_cmd_relay_accepts_numbered_selection(self):
         tabs = [
