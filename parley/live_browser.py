@@ -267,7 +267,7 @@ class LiveBrowserManager:
         self.command(
             "Target.detachFromTarget",
             {"sessionId": session_id},
-            timeout=2,
+            timeout=None,
         )
 
 
