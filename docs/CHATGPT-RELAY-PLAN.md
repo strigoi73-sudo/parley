@@ -654,6 +654,8 @@ Deliverables:
 
 ### Phase 6 — CLI usability
 
+Status: **Implementation complete; pending local milestone verification**
+
 Deliverables:
 
 - list/select ChatGPT tabs;
@@ -701,7 +703,7 @@ Do not prioritize:
 
 ## 16. Immediate Next Step
 
-Phase 5 is complete and locally verified. Proceed to **Phase 6: CLI usability**. Before the first real end-to-end relay smoke test, complete the remaining production integration from Phase 1 so the CLI uses one persistent live Chrome debugging connection rather than repeated browser-level connections.
+Phase 6 is implemented on `feature/relay-cli` and awaits local milestone verification with `scripts/verify-phase6.ps1`. After it passes, complete the remaining production integration from Phase 1 so the CLI uses one persistent live Chrome debugging connection before the first real end-to-end relay smoke test.
 
 ---
 
@@ -713,6 +715,6 @@ If work resumes in a future session, start here:
 2. Treat `main` as the inherited baseline.
 3. Treat `test/upstream-bridge-live` as the preserved empirical baseline showing the original bridge defects.
 4. Do not assume `feature/live-browser-attach` should be merged wholesale; it is an experimental source of proven ideas.
-5. Continue with **Phase 6: CLI usability**. Before the first real end-to-end relay smoke test, complete the remaining Phase 1 production live-browser integration so the CLI uses one persistent live Chrome debugging connection.
+5. If Phase 6 has not yet been locally verified, run `scripts/verify-phase6.ps1`. After it passes, complete the remaining **Phase 1 production live-browser integration** before running the first real end-to-end relay smoke test. Then proceed to Phase 7.
 6. Before changing architecture, verify whether a newer planning document or merged implementation has replaced this one.
 
