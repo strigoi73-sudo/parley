@@ -498,6 +498,70 @@ class BidirectionalRelayTests(unittest.TestCase):
         self.assertEqual(len(result["transfers"]), 1)
         self.assertEqual(len(calls), 3)
 
+    def test_user_reset_is_detected_before_assistant_reset_finishes(self):
+        calls = []
+        a_state_checks = 0
+
+        def read_turn_state(tab_id):
+            nonlocal a_state_checks
+            if tab_id == "A":
+                a_state_checks += 1
+                if a_state_checks >= 2:
+                    return {
+                        "ok": True,
+                        "user": {
+                            "text": "RESET CHAT",
+                            "turn_id": "user-reset",
+                        },
+                    }
+            return {
+                "ok": True,
+                "user": {
+                    "text": "ordinary message",
+                    "turn_id": "user-normal",
+                },
+            }
+
+        def send_and_wait(tab_id, text, **kwargs):
+            calls.append((tab_id, text, kwargs))
+            if len(calls) == 1:
+                return completed_reply(
+                    "B REPLY: response from B\n\nB REPLY END",
+                    "b1",
+                    0,
+                )
+            self.assertEqual(tab_id, "B")
+            self.assertEqual(text, "RESET CHAT")
+            return completed_reply("RESET CHAT", "b-reset", 1)
+
+        result = run_bidirectional_relay(
+            "A",
+            "B",
+            1,
+            read_response=lambda tab_id: (
+                strict_turn(
+                    "A REPLY: starting answer\n\nA REPLY END",
+                    "a1",
+                    0,
+                )
+                if tab_id == "A"
+                else strict_turn(
+                    "B REPLY: response from B\n\nB REPLY END",
+                    "b1",
+                    0,
+                )
+            ),
+            read_turn_state=read_turn_state,
+            send_and_wait=send_and_wait,
+        )
+
+        self.assertEqual(result["status"], "stopped")
+        self.assertEqual(result["reset_by"], "A")
+        self.assertEqual(result["reset_acknowledged_by"], "B")
+        self.assertTrue(result["reset_propagated"])
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(len(result["transfers"]), 1)
+
     def test_external_a_reset_is_detected_at_safe_checkpoint(self):
         a_reads = 0
         latest_b = strict_turn(
@@ -593,6 +657,7 @@ class BidirectionalRelayTests(unittest.TestCase):
             "B",
             2,
             read_response=workflows.read_response,
+            read_turn_state=workflows.read_turn_state,
             send_and_wait=workflows.send_and_wait,
             validate_tab=workflows._validate_chatgpt_tab,
             control=None,
