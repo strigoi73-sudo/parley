@@ -1,3 +1,8 @@
+param(
+    [ValidateRange(1, 1000000)]
+    [int]$Rounds
+)
+
 $ErrorActionPreference = "Stop"
 
 Set-Location (Split-Path -Parent $PSScriptRoot)
@@ -14,10 +19,15 @@ Write-Host "  3. In ChatGPT A, create a completed assistant reply that can be re
 Write-Host "  4. Leave both tabs open."
 Write-Host ""
 Write-Host "Chrome may ask once to Allow remote debugging for this Parley process." -ForegroundColor Yellow
-Write-Host "This smoke test performs exactly ONE full A -> B -> A round." -ForegroundColor Yellow
+Write-Host "Choose a round limit after selecting ChatGPT A and B." -ForegroundColor Yellow
+Write-Host "While the relay is running, type EXTEND CHAT <new total rounds> to raise the limit." -ForegroundColor Yellow
 Write-Host ""
 
-python .\parley.py relay --rounds 1 --json
+if ($PSBoundParameters.ContainsKey("Rounds")) {
+    python .\parley.py relay --rounds $Rounds --json
+} else {
+    python .\parley.py relay --json
+}
 if ($LASTEXITCODE -ne 0) {
     throw "Live relay smoke test failed."
 }
