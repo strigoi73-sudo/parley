@@ -19,7 +19,8 @@ Write-Host "  3. Leave both ChatGPT tabs open."
 Write-Host ""
 Write-Host "Chrome may ask once to Allow remote debugging for this Parley process." -ForegroundColor Yellow
 Write-Host "Choose a round limit after selecting ChatGPT A and B." -ForegroundColor Yellow
-Write-Host "Then enter the initial prompt Parley should send to ChatGPT A and share with ChatGPT B as the session brief." -ForegroundColor Yellow
+Write-Host "Paste the initial prompt for ChatGPT A. Multiline prompts are supported." -ForegroundColor Yellow
+Write-Host "When finished, enter END PROMPT on a line by itself." -ForegroundColor Yellow
 Write-Host "AI-turn waits have no timeout; use s/status to inspect state and q/stop to end a stuck relay." -ForegroundColor Yellow
 Write-Host "While the relay is running, type EXTEND CHAT <new total rounds> to raise the limit." -ForegroundColor Yellow
 Write-Host "RESET test: send exact RESET CHAT in either ChatGPT A or B; Parley should synchronize the other chat and stop cleanly." -ForegroundColor Yellow
