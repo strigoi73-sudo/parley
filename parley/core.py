@@ -80,12 +80,12 @@ def get_ws_url(tab_id):
     return None
 
 
-def cdp_connect(tab_id, retries=MAX_RECONNECT):
+def cdp_connect(tab_id, retries=MAX_RECONNECT, timeout=10):
     """Connect to a tab using the configured transport."""
     if connection_mode() == "live":
         for attempt in range(retries):
             try:
-                return LiveTabConnection(tab_id)
+                return LiveTabConnection(tab_id, timeout=timeout)
             except Exception:
                 if attempt < retries - 1:
                     time.sleep(RECONNECT_DELAY)
@@ -100,7 +100,7 @@ def cdp_connect(tab_id, retries=MAX_RECONNECT):
         try:
             ws = websocket.create_connection(
                 ws_url,
-                timeout=10,
+                timeout=timeout,
                 suppress_origin=True,
             )
             return ws
@@ -116,20 +116,36 @@ def cdp_connect(tab_id, retries=MAX_RECONNECT):
     return None
 
 
-def cdp_send(ws, method, params=None, timeout=10):
-    """Send CDP command and wait for response with timeout."""
+def cdp_send(
+    ws,
+    method,
+    params=None,
+    timeout=10,
+    should_stop=None,
+):
+    """Send one CDP command, optionally without an overall deadline."""
     command = getattr(ws, "command", None)
     if callable(command):
-        return command(method, params, timeout=timeout)
+        return command(
+            method,
+            params,
+            timeout=timeout,
+            should_stop=should_stop,
+        )
 
     msg_id = int(time.time() * 1000) % 100000
     msg = {"id": msg_id, "method": method}
     if params:
         msg["params"] = params
     ws.send(json.dumps(msg))
-    ws.settimeout(timeout)
-    deadline = time.time() + timeout
-    while time.time() < deadline:
+    deadline = None if timeout is None else time.monotonic() + timeout
+    poll_timeout = 0.25 if callable(should_stop) else timeout
+    ws.settimeout(poll_timeout)
+
+    while deadline is None or time.monotonic() < deadline:
+        if callable(should_stop) and should_stop():
+            return {"error": "stopped"}
+
         try:
             resp = json.loads(ws.recv())
             if resp.get("id") == msg_id:
@@ -139,17 +155,33 @@ def cdp_send(ws, method, params=None, timeout=10):
                     return {"error": resp["error"]}
                 return {"error": "malformed CDP response"}
         except websocket.WebSocketTimeoutException:
+            if deadline is None:
+                continue
             break
         except Exception:
             break
     return {"error": "timeout"}
 
 
-def cdp_send_with_retry(ws, method, params=None, timeout=10, tab_id=None, retries=MAX_RECONNECT):
+def cdp_send_with_retry(
+    ws,
+    method,
+    params=None,
+    timeout=10,
+    tab_id=None,
+    retries=MAX_RECONNECT,
+    should_stop=None,
+):
     """Send CDP command with automatic reconnection on failure."""
     for attempt in range(retries):
         try:
-            result = cdp_send(ws, method, params, timeout)
+            result = cdp_send(
+                ws,
+                method,
+                params,
+                timeout,
+                should_stop=should_stop,
+            )
             if "error" not in result:
                 return result
             # If error and we have retries left, reconnect. Live target
