@@ -148,6 +148,38 @@ cd parley
 pip install -r requirements.txt
 ```
 
+### Windows: attach to your existing Chrome session (Chrome 144+)
+
+Parley can also attach to the Chrome instance you are already using, preserving
+your current tabs and signed-in sessions. Chrome must have its live remote
+debugging server enabled explicitly.
+
+1. In your normal Chrome, open `chrome://inspect/#remote-debugging`.
+2. Enable remote debugging.
+3. In PowerShell, from the Parley repo:
+
+```powershell
+$env:PARLEY_CONNECTION_MODE = "live"
+$env:PARLEY_CHROME_USER_DATA_DIR = "$env:LOCALAPPDATA\Google\Chrome\User Data"
+python .\parley.py list
+```
+
+Chrome may display an authorization prompt when Parley first attaches. Approve
+that prompt to let Parley enumerate and control the tabs in this running
+browser session.
+
+Live mode reads Chrome's `DevToolsActivePort` file and connects to the
+browser-level CDP WebSocket. It then uses `Target.getTargets` and flattened
+`Target.attachToTarget` sessions so the existing Parley workflow layer can
+operate on your current tabs without launching a second Chrome profile.
+
+Set `PARLEY_CONNECTION_MODE=classic` (or unset it) to return to the original
+`localhost:9222` behavior.
+
+> **Security:** live mode attaches to your everyday browser. Only pass Parley
+> tab IDs you intend to automate, and treat the existing `cookies` command as
+> credential-sensitive.
+
 ### 1. Start your browser with CDP enabled
 
 Parley talks to a browser that has remote debugging turned on. Use the helper:
