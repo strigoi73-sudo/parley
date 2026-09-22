@@ -15,6 +15,7 @@ class RelayCLITests(unittest.TestCase):
             "4",
             "--include-text",
             "--json",
+            "--prompt-a",
         ])
 
         self.assertEqual(options["tab_a"], "1")
@@ -22,6 +23,7 @@ class RelayCLITests(unittest.TestCase):
         self.assertEqual(options["rounds"], 4)
         self.assertTrue(options["include_text"])
         self.assertTrue(options["json_output"])
+        self.assertTrue(options["prompt_a"])
 
     def test_resolve_tab_by_number_or_id(self):
         tabs = [
@@ -184,6 +186,112 @@ class RelayCLITests(unittest.TestCase):
             rendered,
         )
         self.assertIn("Round limit extended to 3.", rendered)
+
+    def test_select_initial_prompt_reprompts_until_nonblank(self):
+        answers = iter(["", "   ", "Start the discussion"])
+        prompt = cli._select_initial_prompt(
+            input_fn=lambda _: next(answers)
+        )
+        self.assertEqual(prompt, "Start the discussion")
+
+    def test_cmd_relay_prompt_a_sends_initial_prompt_before_session(self):
+        tabs = [
+            {
+                "id": "TAB-A",
+                "title": "Chat A",
+                "url": "https://chatgpt.com/c/a",
+            },
+            {
+                "id": "TAB-B",
+                "title": "Chat B",
+                "url": "https://chatgpt.com/c/b",
+            },
+        ]
+        answers = iter(["Discuss whether Pluto is a planet."])
+
+        with mock.patch.object(
+            cli,
+            "_chatgpt_tabs",
+            return_value=tabs,
+        ), mock.patch.object(
+            cli.workflows,
+            "send_and_wait",
+            return_value={
+                "response_text": (
+                    "A REPLY: Starting reply\n\nA REPLY END"
+                ),
+                "response_complete": True,
+            },
+        ) as send_wait, mock.patch.object(
+            cli,
+            "RelaySession",
+        ) as session_cls, mock.patch.object(
+            cli,
+            "_run_interactive_relay",
+            return_value=0,
+        ) as run:
+            session = session_cls.return_value
+            code = cli.cmd_relay(
+                ["1", "2", "--rounds=2", "--prompt-a"],
+                input_fn=lambda _: next(answers),
+            )
+
+        self.assertEqual(code, 0)
+        send_wait.assert_called_once_with(
+            "TAB-A",
+            "Discuss whether Pluto is a planet.",
+            expected_reply_prefix="A REPLY:",
+            expected_reply_suffix="A REPLY END",
+        )
+        session_cls.assert_called_once_with(
+            cli.workflows.bridge,
+            "TAB-A",
+            "TAB-B",
+            2,
+            include_text=False,
+        )
+        run.assert_called_once_with(
+            session,
+            input_stream=None,
+            output_json=False,
+        )
+
+    def test_cmd_relay_prompt_a_failure_does_not_start_session(self):
+        tabs = [
+            {
+                "id": "TAB-A",
+                "title": "Chat A",
+                "url": "https://chatgpt.com/c/a",
+            },
+            {
+                "id": "TAB-B",
+                "title": "Chat B",
+                "url": "https://chatgpt.com/c/b",
+            },
+        ]
+
+        with mock.patch.object(
+            cli,
+            "_chatgpt_tabs",
+            return_value=tabs,
+        ), mock.patch.object(
+            cli.workflows,
+            "send_and_wait",
+            return_value={
+                "error": "chatgpt_marked_response_timeout",
+                "response_complete": False,
+            },
+        ), mock.patch.object(
+            cli,
+            "RelaySession",
+        ) as session_cls:
+            code = cli.cmd_relay(
+                ["1", "2", "--rounds=2", "--prompt-a"],
+                input_fn=lambda _: "Start",
+            )
+
+        self.assertEqual(code, 1)
+        session_cls.assert_not_called()
 
     def test_cmd_relay_accepts_numbered_selection(self):
         tabs = [
