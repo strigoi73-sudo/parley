@@ -29,6 +29,7 @@ class RelaySession:
         self._state = "IDLE"
         self._events = []
         self._transfers = []
+        self._rounds_completed = 0
         self._result = None
         self._exception = None
 
@@ -38,7 +39,13 @@ class RelaySession:
             if event.get("event") == "state_changed":
                 self._state = event.get("state", self._state)
             elif event.get("event") == "transfer_completed":
-                self._transfers.append(dict(event))
+                item = dict(event)
+                self._transfers.append(item)
+                if item.get("direction") == "B->A":
+                    self._rounds_completed = max(
+                        self._rounds_completed,
+                        int(item.get("round", 0) or 0),
+                    )
 
     def _run(self):
         try:
@@ -109,9 +116,9 @@ class RelaySession:
             transfers = list(self._transfers)
             state = self._state
             exception = self._exception
+            rounds_completed = self._rounds_completed
 
         last_transfer = transfers[-1] if transfers else None
-        rounds_completed = 0
         status = "running" if self.is_alive() else "idle"
 
         if isinstance(result, dict):
