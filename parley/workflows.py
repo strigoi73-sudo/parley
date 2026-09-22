@@ -339,6 +339,80 @@ def _chatgpt_has_new_assistant(pre_state, current_state):
     return False
 
 
+def _normalize_chatgpt_text(value):
+    """Normalize rendered chat text for deterministic equality checks."""
+    return " ".join(str(value or "").split())
+
+
+def _chatgpt_has_new_user(pre_state, current_state, expected_text):
+    """Return True only when the submitted user turn can be proven."""
+    current = current_state.get("user")
+    previous = pre_state.get("user")
+    expected = _normalize_chatgpt_text(expected_text)
+
+    if isinstance(current, dict):
+        current_text = _normalize_chatgpt_text(current.get("text"))
+        if expected and current_text != expected:
+            return False
+
+        current_id = current.get("turn_id")
+        previous_id = (
+            previous.get("turn_id")
+            if isinstance(previous, dict)
+            else None
+        )
+
+        if current_id and previous_id:
+            return current_id != previous_id
+
+        if previous is None:
+            return True
+
+        previous_text = _normalize_chatgpt_text(previous.get("text"))
+        if current_text and current_text != previous_text:
+            return True
+
+        pre_count = int(pre_state.get("user_count", 0) or 0)
+        current_count = int(current_state.get("user_count", 0) or 0)
+        if current_count > pre_count and current_text:
+            return True
+
+        return False
+
+    # Backward-compatible fallback for state producers without explicit
+    # user-turn metadata. Current ChatGPT strict state does provide it.
+    pre_count = int(pre_state.get("user_count", 0) or 0)
+    current_count = int(current_state.get("user_count", 0) or 0)
+    return current_count > pre_count
+
+
+def _chatgpt_same_user_turn(expected_state, current_state):
+    """Return True when both states refer to the same latest user turn."""
+    expected = expected_state.get("user")
+    current = current_state.get("user")
+
+    if isinstance(expected, dict) and isinstance(current, dict):
+        expected_id = expected.get("turn_id")
+        current_id = current.get("turn_id")
+
+        if expected_id and current_id:
+            return expected_id == current_id
+
+        expected_text = _normalize_chatgpt_text(expected.get("text"))
+        current_text = _normalize_chatgpt_text(current.get("text"))
+        if expected_text and current_text:
+            return expected_text == current_text
+
+        return False
+
+    if expected is None and current is None:
+        return int(expected_state.get("user_count", 0) or 0) == int(
+            current_state.get("user_count", 0) or 0
+        )
+
+    return False
+
+
 def _chatgpt_send_and_wait(
     tab_id,
     text,
@@ -445,7 +519,7 @@ def _chatgpt_send_and_wait(
                     "verify_submission",
                     detail=state,
                 )
-            if int(state.get("user_count", 0) or 0) > pre_user_count:
+            if _chatgpt_has_new_user(pre_state, state, text):
                 submitted_state = state
                 break
             time.sleep(0.1)
@@ -509,13 +583,17 @@ def _chatgpt_send_and_wait(
             current_user_count = int(
                 state.get("user_count", 0) or 0
             )
-            if current_user_count != submitted_user_count:
+            if not _chatgpt_same_user_turn(submitted_state, state):
+                submitted_user = submitted_state.get("user") or {}
+                current_user = state.get("user") or {}
                 return fail(
                     "chatgpt_user_turn_changed_during_response",
                     "track_response",
                     response_text=last_text,
                     expected_user_count=submitted_user_count,
                     current_user_count=current_user_count,
+                    expected_user_turn_id=submitted_user.get("turn_id"),
+                    current_user_turn_id=current_user.get("turn_id"),
                 )
 
             current = state.get("assistant")
@@ -586,6 +664,9 @@ def _chatgpt_send_and_wait(
                     "pre_user_count": pre_user_count,
                     "post_user_count": int(
                         state.get("user_count", 0) or 0
+                    ),
+                    "submitted_user_turn_id": (
+                        (submitted_state.get("user") or {}).get("turn_id")
                     ),
                     "send_method": click.get(
                         "method",
