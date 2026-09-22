@@ -1,0 +1,275 @@
+import unittest
+from unittest import mock
+
+from parley import workflows
+from parley.relay import RelayControl, run_bidirectional_relay
+
+
+def strict_turn(text, turn_id, turn_index):
+    return {
+        "ok": True,
+        "text": text,
+        "turn_id": turn_id,
+        "turn_index": turn_index,
+        "source": "chatgpt-strict",
+        "hasStreaming": False,
+        "hasStopButton": False,
+    }
+
+
+def completed_reply(text, turn_id, turn_index):
+    return {
+        "response_text": text,
+        "response_turn_id": turn_id,
+        "response_turn_index": turn_index,
+        "response_source": "chatgpt-strict",
+        "response_complete": True,
+    }
+
+
+class SequencedControl:
+    def __init__(self, outcomes, initial_state="running"):
+        self.outcomes = list(outcomes)
+        self._state = initial_state
+
+    @property
+    def state(self):
+        return self._state
+
+    def wait_until_runnable(self):
+        if not self.outcomes:
+            return True
+        outcome = self.outcomes.pop(0)
+        if outcome == "resume":
+            self._state = "running"
+            return True
+        if outcome == "stop":
+            self._state = "stopped"
+            return False
+        return bool(outcome)
+
+
+class RelaySafetyTests(unittest.TestCase):
+    def test_duplicate_source_turn_is_blocked_before_second_delivery(self):
+        calls = []
+        replies = [
+            completed_reply("B1", "b1", 0),
+            # A incorrectly returns the same A1 source identity/text again.
+            completed_reply("A1", "a1", 0),
+        ]
+
+        def send_and_wait(tab_id, text):
+            calls.append((tab_id, text))
+            return replies.pop(0)
+
+        result = run_bidirectional_relay(
+            "A",
+            "B",
+            2,
+            read_response=lambda _: strict_turn("A1", "a1", 0),
+            send_and_wait=send_and_wait,
+        )
+
+        self.assertEqual(calls, [("B", "A1"), ("A", "B1")])
+        self.assertEqual(result["status"], "error")
+        self.assertEqual(result["error"], "relay_duplicate_source_turn")
+        self.assertEqual(result["round"], 2)
+        self.assertEqual(len(result["transfers"]), 2)
+        self.assertTrue(
+            any(
+                item["event"] == "duplicate_blocked"
+                for item in result["audit"]
+            )
+        )
+
+    def test_stop_checkpoint_prevents_next_send(self):
+        calls = []
+        # Checkpoints: prepare, read_a, a_to_b, then stop at b_to_a.
+        control = SequencedControl([True, True, True, "stop"])
+
+        def send_and_wait(tab_id, text):
+            calls.append((tab_id, text))
+            return completed_reply("B1", "b1", 0)
+
+        result = run_bidirectional_relay(
+            "A",
+            "B",
+            1,
+            read_response=lambda _: strict_turn("A1", "a1", 0),
+            send_and_wait=send_and_wait,
+            control=control,
+        )
+
+        self.assertEqual(calls, [("B", "A1")])
+        self.assertEqual(result["status"], "stopped")
+        self.assertEqual(result["state"], "STOPPED")
+        self.assertEqual(result["stage"], "b_to_a")
+        self.assertEqual(len(result["transfers"]), 1)
+
+    def test_pause_resumes_without_duplicate_send(self):
+        calls = []
+        # Start paused; first checkpoint transitions through PAUSED then resumes.
+        control = SequencedControl(["resume"], initial_state="paused")
+
+        def send_and_wait(tab_id, text):
+            calls.append((tab_id, text))
+            if tab_id == "B":
+                return completed_reply("B1", "b1", 0)
+            return completed_reply("A2", "a2", 1)
+
+        result = run_bidirectional_relay(
+            "A",
+            "B",
+            1,
+            read_response=lambda _: strict_turn("A1", "a1", 0),
+            send_and_wait=send_and_wait,
+            control=control,
+        )
+
+        self.assertEqual(result["status"], "complete")
+        self.assertEqual(calls, [("B", "A1"), ("A", "B1")])
+        self.assertIn("PAUSED", result["state_history"])
+        events = [item["event"] for item in result["audit"]]
+        self.assertIn("relay_paused", events)
+        self.assertIn("relay_resumed", events)
+
+    def test_tab_validation_failure_stops_before_b_to_a_send(self):
+        calls = []
+        b_checks = 0
+
+        def validate_tab(tab_id):
+            nonlocal b_checks
+            if tab_id == "B":
+                b_checks += 1
+                if b_checks >= 3:
+                    return {
+                        "ok": False,
+                        "error": "relay_tab_not_chatgpt",
+                    }
+            return {"ok": True}
+
+        def send_and_wait(tab_id, text):
+            calls.append((tab_id, text))
+            return completed_reply("B1", "b1", 0)
+
+        result = run_bidirectional_relay(
+            "A",
+            "B",
+            1,
+            read_response=lambda _: strict_turn("A1", "a1", 0),
+            send_and_wait=send_and_wait,
+            validate_tab=validate_tab,
+        )
+
+        self.assertEqual(calls, [("B", "A1")])
+        self.assertEqual(result["status"], "error")
+        self.assertEqual(result["error"], "relay_tab_not_chatgpt")
+        self.assertEqual(result["stage"], "b_to_a")
+
+    def test_callback_exception_becomes_structured_error(self):
+        def boom(tab_id, text):
+            raise RuntimeError("connection vanished")
+
+        result = run_bidirectional_relay(
+            "A",
+            "B",
+            1,
+            read_response=lambda _: strict_turn("A1", "a1", 0),
+            send_and_wait=boom,
+        )
+
+        self.assertEqual(result["status"], "error")
+        self.assertEqual(result["error"], "relay_transfer_exception")
+        self.assertEqual(result["stage"], "a_to_b")
+        self.assertIn("connection vanished", result["detail"])
+
+    def test_audit_and_transfer_records_hide_text_by_default(self):
+        def send_and_wait(tab_id, text):
+            if tab_id == "B":
+                return completed_reply("SECRET B1", "b1", 0)
+            return completed_reply("SECRET A2", "a2", 1)
+
+        result = run_bidirectional_relay(
+            "A",
+            "B",
+            1,
+            read_response=lambda _: strict_turn(
+                "SECRET A1",
+                "a1",
+                0,
+            ),
+            send_and_wait=send_and_wait,
+        )
+
+        self.assertEqual(result["status"], "complete")
+        for transfer in result["transfers"]:
+            self.assertNotIn("source_text", transfer)
+            self.assertNotIn("response_text", transfer)
+            self.assertIn("source_hash", transfer)
+            self.assertIn("response_hash", transfer)
+
+        audit_text = repr(result["audit"])
+        self.assertNotIn("SECRET A1", audit_text)
+        self.assertNotIn("SECRET B1", audit_text)
+        self.assertNotIn("SECRET A2", audit_text)
+
+    def test_include_text_must_be_explicit(self):
+        def send_and_wait(tab_id, text):
+            if tab_id == "B":
+                return completed_reply("B1", "b1", 0)
+            return completed_reply("A2", "a2", 1)
+
+        result = run_bidirectional_relay(
+            "A",
+            "B",
+            1,
+            read_response=lambda _: strict_turn("A1", "a1", 0),
+            send_and_wait=send_and_wait,
+            include_text=True,
+        )
+
+        self.assertEqual(
+            result["transfers"][0]["source_text"],
+            "A1",
+        )
+        self.assertEqual(
+            result["transfers"][0]["response_text"],
+            "B1",
+        )
+
+    def test_workflow_tab_validator_rejects_navigation_away(self):
+        with mock.patch.object(
+            workflows.core,
+            "tab_url",
+            return_value="https://example.com/",
+        ):
+            result = workflows._validate_chatgpt_tab("tab-a")
+
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["error"], "relay_tab_not_chatgpt")
+
+    def test_workflow_tab_validator_rejects_missing_tab(self):
+        with mock.patch.object(
+            workflows.core,
+            "tab_url",
+            return_value="",
+        ):
+            result = workflows._validate_chatgpt_tab("tab-a")
+
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["error"], "relay_tab_unavailable")
+
+    def test_relay_control_stop_is_terminal(self):
+        control = RelayControl()
+        control.pause()
+        self.assertEqual(control.state, "paused")
+        control.resume()
+        self.assertEqual(control.state, "running")
+        control.stop()
+        self.assertEqual(control.state, "stopped")
+        control.resume()
+        self.assertEqual(control.state, "stopped")
+
+
+if __name__ == "__main__":
+    unittest.main()
