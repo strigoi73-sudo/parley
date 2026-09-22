@@ -362,6 +362,30 @@ def _handle_relay_command(command, session):
     )
 
 
+def _poll_chat_reset(session):
+    """Detect exact RESET CHAT user input while the relay is parked."""
+    request_reset = getattr(session, "request_reset", None)
+    if not callable(request_reset):
+        return None
+
+    for label, attr in (("A", "tab_a"), ("B", "tab_b")):
+        tab_id = getattr(session, attr, None)
+        if not tab_id:
+            continue
+        try:
+            state = workflows.read_turn_state(tab_id)
+        except Exception:
+            continue
+        if not isinstance(state, dict) or not state.get("ok"):
+            continue
+        user = state.get("user") or {}
+        if (user.get("text") or "").strip() == RESET_CHAT_COMMAND:
+            request_reset(label)
+            return label
+
+    return None
+
+
 def _run_interactive_relay(
     session,
     *,
@@ -391,6 +415,7 @@ def _run_interactive_relay(
     seen_transfers = 0
     round_limit_prompted = False
     awaiting_extension_total = False
+    reset_detection_requested = False
 
     try:
         while session.is_alive():
@@ -398,6 +423,18 @@ def _run_interactive_relay(
             transfer_count = status["transfers_completed"]
 
             if status.get("awaiting_extension"):
+                if not reset_detection_requested:
+                    reset_label = _poll_chat_reset(session)
+                    if reset_label:
+                        print()
+                        print(
+                            "RESET CHAT detected in ChatGPT %s. "
+                            "Coordinating reset..." % reset_label
+                        )
+                        reset_detection_requested = True
+                        sleep(0)
+                        continue
+
                 if not round_limit_prompted:
                     print()
                     print(
@@ -409,6 +446,7 @@ def _run_interactive_relay(
             else:
                 round_limit_prompted = False
                 awaiting_extension_total = False
+                reset_detection_requested = False
 
             if transfer_count > seen_transfers:
                 last_transfer = status.get("last_transfer")
