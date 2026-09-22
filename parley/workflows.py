@@ -437,6 +437,7 @@ def _chatgpt_send_and_wait(
     adapter=None,
     expected_reply_prefix=None,
     expected_reply_suffix=None,
+    should_stop=None,
 ):
     """Strict ChatGPT send/wait transaction using one target connection.
 
@@ -458,7 +459,16 @@ def _chatgpt_send_and_wait(
         }
 
     started = time.monotonic()
-    deadline = started + (wait_timeout_ms / 1000.0)
+    deadline = (
+        None
+        if wait_timeout_ms is None
+        else started + (wait_timeout_ms / 1000.0)
+    )
+
+    def keep_waiting(until=None):
+        if callable(should_stop) and should_stop():
+            return False
+        return until is None or time.monotonic() < until
 
     ws = cdp_connect(tab_id)
     if not ws:
@@ -530,8 +540,12 @@ def _chatgpt_send_and_wait(
         submitted_state = None
         human_reset_requested = False
         last_submission_state = None
-        submission_deadline = min(deadline, time.monotonic() + 10.0)
-        while time.monotonic() < submission_deadline:
+        submission_deadline = (
+            None
+            if deadline is None
+            else min(deadline, time.monotonic() + 10.0)
+        )
+        while keep_waiting(submission_deadline):
             state = _chatgpt_state(ws, adapter)
             last_submission_state = state
             if not state.get("ok"):
@@ -550,6 +564,12 @@ def _chatgpt_send_and_wait(
             time.sleep(0.1)
 
         if submitted_state is None:
+            if callable(should_stop) and should_stop():
+                return fail(
+                    "chatgpt_wait_stopped",
+                    "verify_submission",
+                    pre_user_count=pre_user_count,
+                )
             observed_user = (
                 (last_submission_state or {}).get("user") or {}
             )
@@ -590,7 +610,7 @@ def _chatgpt_send_and_wait(
             last_identity = None
             candidate_seen = False
 
-            while time.monotonic() < deadline:
+            while keep_waiting(deadline):
                 state = _chatgpt_state(ws, adapter)
                 if not state.get("ok"):
                     return fail(
@@ -730,6 +750,15 @@ def _chatgpt_send_and_wait(
 
                 time.sleep(0.2)
 
+            if callable(should_stop) and should_stop():
+                return fail(
+                    "chatgpt_wait_stopped",
+                    "track_marked_response",
+                    response_text=last_text,
+                    pre_msg_count=pre_assistant_count,
+                    pre_user_count=pre_user_count,
+                )
+
             return fail(
                 "chatgpt_marked_response_timeout",
                 "track_marked_response",
@@ -743,7 +772,7 @@ def _chatgpt_send_and_wait(
 
         # Now require a provably newer assistant turn.
         response_state = None
-        while time.monotonic() < deadline:
+        while keep_waiting(deadline):
             state = _chatgpt_state(ws, adapter)
             if not state.get("ok"):
                 return fail(
@@ -757,6 +786,12 @@ def _chatgpt_send_and_wait(
             time.sleep(0.2)
 
         if response_state is None:
+            if callable(should_stop) and should_stop():
+                return fail(
+                    "chatgpt_wait_stopped",
+                    "wait_for_response",
+                    pre_assistant_count=pre_assistant_count,
+                )
             return fail(
                 "chatgpt_new_assistant_turn_timeout",
                 "wait_for_response",
@@ -780,7 +815,7 @@ def _chatgpt_send_and_wait(
         last_change = time.monotonic()
         candidate_replacements = 0
 
-        while time.monotonic() < deadline:
+        while keep_waiting(deadline):
             state = _chatgpt_state(ws, adapter)
             if not state.get("ok"):
                 return fail(
@@ -895,6 +930,15 @@ def _chatgpt_send_and_wait(
                 }
 
             time.sleep(0.2)
+
+        if callable(should_stop) and should_stop():
+            return fail(
+                "chatgpt_wait_stopped",
+                "track_response",
+                response_text=last_text,
+                response_turn_id=target_turn_id,
+                response_turn_index=target_turn_index,
+            )
 
         return fail(
             "chatgpt_response_completion_timeout",
@@ -1050,6 +1094,7 @@ def send_and_wait(
     silence_ms=1500,
     expected_reply_prefix=None,
     expected_reply_suffix=None,
+    should_stop=None,
 ):
     """Send text and wait for a new completed response.
 
@@ -1072,6 +1117,7 @@ def send_and_wait(
             adapter=adapter,
             expected_reply_prefix=expected_reply_prefix,
             expected_reply_suffix=expected_reply_suffix,
+            should_stop=should_stop,
         )
 
     return _legacy_send_and_wait(
