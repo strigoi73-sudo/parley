@@ -257,6 +257,36 @@ class LiveBrowserProductionTests(unittest.TestCase):
             }],
         )
 
+    def test_live_protocol_error_is_normalized(self):
+        class ErrorSocket(FakeBrowserWebSocket):
+            def send(self, payload):
+                message = json.loads(payload)
+                self.sent.append(message)
+                self.queue.append(json.dumps({
+                    "id": message["id"],
+                    "error": {
+                        "code": -32000,
+                        "message": "session closed",
+                    },
+                }))
+
+        fake = ErrorSocket()
+        manager = LiveBrowserManager(
+            endpoint_fn=lambda: "ws://127.0.0.1:9222/devtools/browser/test"
+        )
+
+        with mock.patch(
+            "parley.live_browser.websocket.create_connection",
+            return_value=fake,
+        ):
+            result = manager.command("Target.getTargets")
+
+        self.assertIn("error", result)
+        self.assertEqual(
+            result["error"]["message"],
+            "session closed",
+        )
+
     def test_live_retry_reattaches_same_handle(self):
         class RecoveringConnection:
             def __init__(self):
