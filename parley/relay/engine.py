@@ -154,6 +154,7 @@ def run_bidirectional_relay(
     validate_tab=None,
     control=None,
     include_text=False,
+    event_sink=None,
 ):
     """Run a guarded A -> B -> A relay for a fixed number of rounds.
 
@@ -185,13 +186,28 @@ def run_bidirectional_relay(
         "audit": [],
     }
 
+    def emit(item):
+        if event_sink is None:
+            return
+        try:
+            event_sink(dict(item))
+        except Exception:
+            # Observability must never be able to break relay execution.
+            pass
+
     def record(event, **fields):
-        result["audit"].append(audit_event(event, **fields))
+        item = audit_event(event, **fields)
+        result["audit"].append(item)
+        emit(item)
 
     def transition(state):
         result["state"] = state
         if not result["state_history"] or result["state_history"][-1] != state:
             result["state_history"].append(state)
+        emit({
+            "event": "state_changed",
+            "state": state,
+        })
 
     def fail(error, stage, round_number=None, detail=None):
         transition(ERROR)
