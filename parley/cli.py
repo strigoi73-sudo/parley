@@ -159,6 +159,25 @@ def _select_rounds(input_fn=input):
         print("Enter a whole number of rounds greater than zero.")
 
 
+def _flush_pending_console_input():
+    """Best-effort discard of queued Windows console input after Ctrl+C."""
+    if os.name != "nt" or not getattr(sys.stdin, "isatty", lambda: False)():
+        return False
+
+    try:
+        import ctypes
+
+        std_input_handle = -10
+        handle = ctypes.windll.kernel32.GetStdHandle(std_input_handle)
+        if not handle or handle == -1:
+            return False
+        return bool(
+            ctypes.windll.kernel32.FlushConsoleInputBuffer(handle)
+        )
+    except Exception:
+        return False
+
+
 def _select_initial_prompt(input_fn=input):
     """Read a complete multiline initial prompt terminated explicitly."""
     terminator = "END PROMPT"
@@ -170,11 +189,17 @@ def _select_initial_prompt(input_fn=input):
         )
         lines = []
 
-        while True:
-            value = input_fn("> ")
-            if value.strip() == terminator:
-                break
-            lines.append(value)
+        try:
+            while True:
+                value = input_fn("> ")
+                if value.strip() == terminator:
+                    break
+                lines.append(value)
+        except KeyboardInterrupt:
+            _flush_pending_console_input()
+            print()
+            print("Initial prompt cancelled.")
+            raise
 
         prompt = "\n".join(lines).strip()
         if prompt:
