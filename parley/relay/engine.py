@@ -270,21 +270,122 @@ def run_bidirectional_relay(
         )
         return result
 
-    def reset_requested(label, stage, round_number=None):
-        transition(STOPPED)
-        result["status"] = "stopped"
-        result["stage"] = stage
+    def coordinated_reset(label, stage, round_number=None):
+        counterpart_label = "B" if label == "A" else "A"
+        counterpart_tab = tab_b if label == "A" else tab_a
+        expected_prefix = (
+            TEST_B_REPLY_PREFIX if label == "A" else TEST_A_REPLY_PREFIX
+        )
+        expected_suffix = (
+            TEST_B_REPLY_SUFFIX if label == "A" else TEST_A_REPLY_SUFFIX
+        )
+
         result["reset_requested"] = True
         result["reset_by"] = label
+        result["reset_propagated"] = False
+        result["restart_point"] = "A"
+        result["awaiting_human_restart"] = True
         if round_number is not None:
             result["round"] = round_number
+
         record(
             "relay_reset_requested",
             chat=label,
             stage=stage,
             round=round_number,
         )
+
+        validation_failure = validate(
+            counterpart_label,
+            counterpart_tab,
+            "reset_propagation",
+            round_number,
+        )
+        if validation_failure:
+            return validation_failure
+
+        record(
+            "relay_reset_propagation_started",
+            source_chat=label,
+            destination_chat=counterpart_label,
+            round=round_number,
+        )
+
+        try:
+            raw = send_and_wait(
+                counterpart_tab,
+                RESET_CHAT_COMMAND,
+                expected_reply_prefix=expected_prefix,
+                expected_reply_suffix=expected_suffix,
+            )
+        except Exception as exc:
+            return fail(
+                "relay_reset_propagation_failed",
+                "reset_propagation",
+                round_number=round_number,
+                detail={
+                    "source_chat": label,
+                    "destination_chat": counterpart_label,
+                    "exception": str(exc),
+                },
+            )
+
+        reply, error = _completed_reply(raw)
+        if error or not _is_reset_command((reply or {}).get("text")):
+            return fail(
+                "relay_reset_propagation_failed",
+                "reset_propagation",
+                round_number=round_number,
+                detail={
+                    "source_chat": label,
+                    "destination_chat": counterpart_label,
+                    "response_error": error,
+                    "response_text": (
+                        (reply or {}).get("text")
+                        if reply is not None
+                        else raw.get("response_text")
+                        if isinstance(raw, dict)
+                        else None
+                    ),
+                },
+            )
+
+        result["reset_propagated"] = True
+        result["reset_acknowledged_by"] = counterpart_label
+        record(
+            "relay_reset_propagated",
+            source_chat=label,
+            destination_chat=counterpart_label,
+            round=round_number,
+        )
+
+        transition(STOPPED)
+        result["status"] = "stopped"
+        result["stage"] = "reset"
+        record(
+            "relay_stopped",
+            stage="reset",
+            round=round_number,
+        )
         return result
+
+    def external_reset_requested(label, tab_id, cached_turn):
+        if cached_turn is None:
+            return False
+        try:
+            raw = read_response(tab_id)
+        except Exception:
+            return False
+        latest, error = _initial_turn(raw)
+        if error or latest is None:
+            return False
+        if not _is_reset_command(latest.get("text")):
+            return False
+        return (
+            latest.get("turn_id") != cached_turn.get("turn_id")
+            or latest.get("turn_index") != cached_turn.get("turn_index")
+            or latest.get("text") != cached_turn.get("text")
+        )
 
     def checkpoint(stage, round_number=None):
         resume_state = result["state"]
@@ -494,6 +595,23 @@ def run_bidirectional_relay(
             if validation_failure:
                 return validation_failure
 
+        if test_protocol:
+            if external_reset_requested("A", tab_a, current_a):
+                return coordinated_reset(
+                    "A",
+                    "a_to_b",
+                    round_number,
+                )
+            if (
+                current_b is not None
+                and external_reset_requested("B", tab_b, current_b)
+            ):
+                return coordinated_reset(
+                    "B",
+                    "a_to_b",
+                    round_number,
+                )
+
         fingerprint = claim(
             tab_a,
             tab_b,
@@ -565,7 +683,7 @@ def run_bidirectional_relay(
 
         if test_protocol:
             if _is_reset_command(current_b["text"]):
-                return reset_requested(
+                return coordinated_reset(
                     "B",
                     "a_to_b",
                     round_number,
@@ -616,6 +734,20 @@ def run_bidirectional_relay(
             )
             if validation_failure:
                 return validation_failure
+
+        if test_protocol:
+            if external_reset_requested("B", tab_b, current_b):
+                return coordinated_reset(
+                    "B",
+                    "b_to_a",
+                    round_number,
+                )
+            if external_reset_requested("A", tab_a, current_a):
+                return coordinated_reset(
+                    "A",
+                    "b_to_a",
+                    round_number,
+                )
 
         fingerprint = claim(
             tab_b,
@@ -669,7 +801,7 @@ def run_bidirectional_relay(
 
         if test_protocol:
             if _is_reset_command(next_a["text"]):
-                return reset_requested(
+                return coordinated_reset(
                     "A",
                     "b_to_a",
                     round_number,
