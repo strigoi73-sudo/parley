@@ -249,6 +249,7 @@ class RelayCLITests(unittest.TestCase):
             "TAB-B",
             2,
             include_text=False,
+            initial_context="Discuss whether Pluto is a planet.",
         )
         run.assert_called_once_with(
             session,
@@ -333,6 +334,7 @@ class RelayCLITests(unittest.TestCase):
             "TAB-B",
             2,
             include_text=False,
+            initial_context=None,
         )
         run.assert_called_once_with(
             session,
@@ -385,6 +387,7 @@ class RelayCLITests(unittest.TestCase):
             "TAB-B",
             4,
             include_text=False,
+            initial_context=None,
         )
 
     def test_cmd_relay_rejects_same_tab(self):
@@ -420,6 +423,7 @@ class RelaySessionTests(unittest.TestCase):
             control,
             include_text,
             event_sink,
+            initial_context,
         ):
             event_sink({
                 "event": "state_changed",
