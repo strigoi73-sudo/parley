@@ -1,7 +1,7 @@
 """Parley CLI - thin dispatch layer over parley.core and parley.workflows.
 
 Usage:
-    parley list
+    parley [--live|--classic] list
     parley read <tab_id>
     parley send <tab_id> <text...>
     parley send-wait <tab_id> <text...> [--timeout N]
@@ -20,7 +20,14 @@ Generic browser-automation commands:
     parley cookies <tab_id> [domain]           List cookies (incl. HttpOnly) via CDP
     parley set-cookie <tab_id> <name> <value> <domain> [path=/]
 
+Global options:
+    --live            Attach to the already-running Chrome session using
+                      DevToolsActivePort + browser Target sessions.
+    --classic         Use the original localhost CDP port transport (default).
+
 Environment:
+    PARLEY_CONNECTION_MODE  classic (default) or live
+    PARLEY_CHROME_USER_DATA_DIR  Chrome user-data directory for live mode
     PARLEY_CDP_HOST   CDP host (default: localhost)
     PARLEY_CDP_PORT   CDP port (default: 9222)
 """
@@ -44,6 +51,16 @@ def cmd_type(tab_id, text):
 
 def main(argv=None):
     argv = list(sys.argv if argv is None else argv)
+
+    # Global transport switches. Keep classic mode as the compatibility
+    # default while making the current-browser path easy to invoke manually.
+    if "--live" in argv[1:]:
+        os.environ["PARLEY_CONNECTION_MODE"] = "live"
+        argv.remove("--live")
+    if "--classic" in argv[1:]:
+        os.environ["PARLEY_CONNECTION_MODE"] = "classic"
+        argv.remove("--classic")
+
     if len(argv) < 2:
         print(__doc__)
         return
