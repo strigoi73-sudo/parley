@@ -228,119 +228,132 @@ def poll(tab_id, interval_ms=2000, max_iters=60):
 
 
 def send_and_wait(tab_id, text, wait_timeout_ms=60000, silence_ms=1500):
-    """Send text to a tab and wait for the full NEW response. Returns a result dict."""
-    result = {}
+    """Send text to a tab and wait for the full NEW response.
 
-    ws_pre = cdp_connect(tab_id)
-    if not ws_pre:
+    Keep one CDP attachment for the complete transaction. This avoids needless
+    detach/reattach churn in live-browser mode and makes response tracking
+    deterministic across both classic and live transports.
+    """
+    result = {}
+    ws = cdp_connect(tab_id)
+    if not ws:
         return {"error": "cannot connect to tab"}
 
-    pre_count = 0
+    started = time.monotonic()
+
     try:
-        count_result = cdp_send(ws_pre, "Runtime.evaluate", {
+        # Snapshot the current assistant-message count before sending.
+        pre_count = 0
+        count_result = cdp_send(ws, "Runtime.evaluate", {
             "expression": UNIVERSAL_GET_MSG_COUNT,
             "returnByValue": True,
         })
         if "result" in count_result and "value" in count_result["result"]:
-            pre_count = count_result["result"]["value"].get("count", 0)
-    finally:
-        try:
-            ws_pre.close()
-        except Exception:
-            pass
+            pre_count = count_result["result"]["value"].get("count", 0) or 0
 
-    result["pre_msg_count"] = pre_count
+        result["pre_msg_count"] = pre_count
 
-    ws_send = cdp_connect(tab_id)
-    if not ws_send:
-        return {"error": "cannot connect for send"}
-
-    prev_text = ""
-    try:
-        send_info, ws_send = robust_send(ws_send, tab_id, text)
+        # Send on the SAME target attachment.
+        send_info, ws = robust_send(ws, tab_id, text)
         result["send_method"] = send_info.get("send_method", "unknown")
         result["reloaded"] = send_info.get("reloaded", False)
-        prev_text = send_info.get("prev_text", "") or ""
         result["sent_chars"] = len(text)
-    finally:
-        try:
-            ws_send.close()
-        except Exception:
-            pass
 
-    time.sleep(1)  # Brief pause for response to start
+        prev_text = send_info.get("prev_text", "") or ""
+        deadline = started + (wait_timeout_ms / 1000.0)
 
-    ws_wait = cdp_connect(tab_id)
-    if not ws_wait:
-        return {**result, "error": "cannot connect for wait"}
+        saw_new = False
+        last_text = ""
+        last_source = ""
+        last_change = None
+        last_streaming = False
 
-    try:
-        max_wait = wait_timeout_ms // 1000
-        found_new = False
-        for _ in range(max_wait * 2):  # Check every 500ms
-            count_result = cdp_send(ws_wait, "Runtime.evaluate", {
-                "expression": UNIVERSAL_GET_MSG_COUNT,
-                "returnByValue": True,
-            })
-            current_count = 0
-            if "result" in count_result and "value" in count_result["result"]:
-                current_count = count_result["result"]["value"].get("count", 0)
-
-            if current_count > pre_count:
-                found_new = True
-                break
-
-            check = cdp_send(ws_wait, "Runtime.evaluate", {
+        # Poll the latest assistant turn through CDP. We intentionally avoid a
+        # page-wide MutationObserver here: modern ChatGPT pages can mutate
+        # unrelated DOM continuously, which makes "silence" a poor completion
+        # signal even when the assistant response itself is stable.
+        while time.monotonic() < deadline:
+            check = cdp_send(ws, "Runtime.evaluate", {
                 "expression": UNIVERSAL_GET_RESPONSE,
                 "returnByValue": True,
             })
+
+            val = {}
             if "result" in check and "value" in check["result"]:
-                val = check["result"]["value"]
-                if val.get("hasStreaming") or val.get("hasStopButton"):
-                    found_new = True
-                    break
-                new_text = val.get("text", "")
-                if new_text and new_text.strip() != prev_text.strip():
-                    found_new = True
-                    break
+                val = check["result"].get("value", {}) or {}
 
-            time.sleep(0.5)
+            current_text = (val.get("text", "") or "").strip()
+            current_count = val.get("count", 0) or 0
+            current_source = val.get("source", "") or ""
+            has_streaming = bool(val.get("hasStreaming"))
+            has_stop = bool(val.get("hasStopButton"))
+            is_streaming = has_streaming or has_stop
 
-        # Wait for streaming to finish. initial_msg_count=0 skips Phase 1;
-        # prev_text makes the observer ignore the pre-send response.
-        observer_js = make_mutation_observer_js(wait_timeout_ms, silence_ms, initial_msg_count=0, prev_text=prev_text)
-        wait_result = cdp_send(ws_wait, "Runtime.evaluate", {
-            "expression": observer_js,
-            "returnByValue": True,
-            "awaitPromise": True,
-        }, timeout=wait_timeout_ms // 1000 + 5)
+            if (
+                current_count > pre_count
+                or (current_text and current_text != prev_text.strip())
+                or is_streaming
+            ):
+                saw_new = True
 
-        if "result" in wait_result and "value" in wait_result["result"]:
-            val = wait_result["result"]["value"]
-            result["response_text"] = val.get("text", "")
-            result["response_duration_ms"] = val.get("duration", 0)
-            result["response_complete"] = val.get("done", False)
-            if not result["response_text"]:
-                result["note"] = "empty response (target may be rate-limited or not logged in)"
+            if saw_new and current_text:
+                if current_text != last_text:
+                    last_text = current_text
+                    last_source = current_source
+                    last_change = time.monotonic()
+
+                last_streaming = is_streaming
+
+                if last_change is not None:
+                    stable_ms = int((time.monotonic() - last_change) * 1000)
+
+                    if not is_streaming and stable_ms >= silence_ms:
+                        result["response_text"] = last_text
+                        result["response_duration_ms"] = int(
+                            (time.monotonic() - started) * 1000
+                        )
+                        result["response_complete"] = True
+                        result["response_source"] = last_source
+                        return result
+
+                    # Fail-soft for UIs whose stop/streaming indicator lingers
+                    # after the text itself has stopped changing.
+                    if stable_ms >= 5000:
+                        result["response_text"] = last_text
+                        result["response_duration_ms"] = int(
+                            (time.monotonic() - started) * 1000
+                        )
+                        result["response_complete"] = True
+                        result["response_source"] = last_source
+                        result["note"] = "text stable despite streaming indicator"
+                        return result
+
+            time.sleep(0.2)
+
+        result["response_text"] = last_text
+        result["response_duration_ms"] = int(
+            (time.monotonic() - started) * 1000
+        )
+        result["response_complete"] = False
+        if last_source:
+            result["response_source"] = last_source
+
+        if last_text:
+            result["note"] = (
+                "assistant text was detected but did not reach a stable "
+                "completion state before timeout"
+            )
         else:
-            final = cdp_send(ws_wait, "Runtime.evaluate", {
-                "expression": UNIVERSAL_GET_RESPONSE,
-                "returnByValue": True,
-            })
-            final_text = ""
-            if "result" in final and "value" in final["result"]:
-                final_text = final["result"]["value"].get("text", "")
-            result["response_text"] = final_text
-            result["response_complete"] = bool(final_text)
-            if not final_text:
-                result["note"] = "empty response (target may be rate-limited or not logged in)"
+            result["note"] = (
+                "no assistant response was detected before timeout"
+            )
+        return result
+
     finally:
         try:
-            ws_wait.close()
+            ws.close()
         except Exception:
             pass
-
-    return result
 
 
 def bridge(tab_from, tab_to, rounds=3):
