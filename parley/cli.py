@@ -553,6 +553,7 @@ def cmd_relay(parts, input_fn=input, input_stream=None):
     if options["rounds"] is None:
         options["rounds"] = _select_rounds(input_fn=input_fn)
 
+    initial_context = None
     if options["prompt_a"]:
         initial_prompt = _select_initial_prompt(input_fn=input_fn)
         print()
@@ -582,6 +583,7 @@ def cmd_relay(parts, input_fn=input, input_stream=None):
             "ChatGPT A completed the starting reply (%d chars)."
             % len(initial_text)
         )
+        initial_context = initial_prompt
 
     print()
     print("ChatGPT A: %s" % (tab_a.get("title") or tab_a["id"]))
@@ -595,6 +597,7 @@ def cmd_relay(parts, input_fn=input, input_stream=None):
         tab_b["id"],
         options["rounds"],
         include_text=options["include_text"],
+        initial_context=initial_context,
     )
 
     return _run_interactive_relay(
