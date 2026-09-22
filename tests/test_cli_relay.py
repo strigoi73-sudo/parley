@@ -178,7 +178,8 @@ class RelayCLITests(unittest.TestCase):
         self.assertEqual(session.extended_to, 3)
         rendered = output.getvalue()
         self.assertIn(
-            "Round limit reached at 1. Extend session? [y/N]",
+            "Round limit reached at 1. "
+            "Extend session? [y/N] (no timeout)",
             rendered,
         )
         self.assertIn(
