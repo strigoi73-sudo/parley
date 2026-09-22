@@ -875,6 +875,16 @@ def run_bidirectional_relay(
                     result["rounds_completed"],
                 )
 
+            if (
+                isinstance(decision, str)
+                and decision.startswith("reset:")
+            ):
+                return coordinated_reset(
+                    decision.split(":", 1)[1],
+                    "round_limit",
+                    result["rounds_completed"],
+                )
+
             if decision == "extended":
                 new_limit = current_round_limit()
                 result["rounds_requested"] = new_limit
