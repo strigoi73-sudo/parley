@@ -352,8 +352,10 @@ def _chatgpt_send_and_wait(
     - one target connection from snapshot through completion;
     - submission must be proven by a newer user turn;
     - response must be proven to be a newer assistant turn;
-    - only that assistant turn may satisfy completion;
-    - ambiguous or changing turn identity fails closed.
+    - only a provably post-submission assistant candidate may satisfy completion;
+    - transient candidate identity replacement is allowed while the same
+      verified user turn remains current;
+    - a newer user turn or ambiguous response state fails closed.
     """
     if adapter is None:
         adapter = _adapter_for_tab(tab_id)
@@ -486,9 +488,13 @@ def _chatgpt_send_and_wait(
         target_assistant_count = int(
             response_state.get("assistant_count", 0) or 0
         )
+        submitted_user_count = int(
+            submitted_state.get("user_count", 0) or 0
+        )
 
         last_text = (target.get("text") or "").strip()
         last_change = time.monotonic()
+        candidate_replacements = 0
 
         while time.monotonic() < deadline:
             state = _chatgpt_state(ws, adapter)
@@ -500,6 +506,18 @@ def _chatgpt_send_and_wait(
                     detail=state,
                 )
 
+            current_user_count = int(
+                state.get("user_count", 0) or 0
+            )
+            if current_user_count != submitted_user_count:
+                return fail(
+                    "chatgpt_user_turn_changed_during_response",
+                    "track_response",
+                    response_text=last_text,
+                    expected_user_count=submitted_user_count,
+                    current_user_count=current_user_count,
+                )
+
             current = state.get("assistant")
             if not current:
                 return fail(
@@ -508,46 +526,47 @@ def _chatgpt_send_and_wait(
                     response_text=last_text,
                 )
 
+            if not _chatgpt_has_new_assistant(pre_state, state):
+                return fail(
+                    "chatgpt_response_candidate_not_new",
+                    "track_response",
+                    response_text=last_text,
+                )
+
             current_count = int(
                 state.get("assistant_count", 0) or 0
             )
-            if current_count > target_assistant_count:
-                return fail(
-                    "chatgpt_unexpected_newer_assistant_turn",
-                    "track_response",
-                    response_text=last_text,
-                    expected_assistant_count=target_assistant_count,
-                    current_assistant_count=current_count,
-                )
-
             current_turn_id = current.get("turn_id")
             current_turn_index = current.get("turn_index")
-
-            if (
-                target_turn_id
-                and current_turn_id
-                and current_turn_id != target_turn_id
-            ):
-                return fail(
-                    "chatgpt_assistant_turn_changed",
-                    "track_response",
-                    response_text=last_text,
-                )
-
-            if (
-                not target_turn_id
-                and current_turn_index != target_turn_index
-            ):
-                return fail(
-                    "chatgpt_assistant_turn_index_changed",
-                    "track_response",
-                    response_text=last_text,
-                )
-
             current_text = (current.get("text") or "").strip()
             now = time.monotonic()
 
-            if current_text != last_text:
+            identity_changed = (
+                (
+                    target_turn_id
+                    and current_turn_id
+                    and current_turn_id != target_turn_id
+                )
+                or (
+                    target_turn_index is not None
+                    and current_turn_index != target_turn_index
+                )
+                or current_count != target_assistant_count
+            )
+
+            if identity_changed:
+                # Current ChatGPT can expose a transient assistant candidate
+                # (for example a "Thinking" surface) and then replace it with
+                # the actual answer while processing the same submitted user
+                # turn. Follow that replacement only while the transaction's
+                # verified user-turn boundary remains unchanged.
+                target_turn_id = current_turn_id
+                target_turn_index = current_turn_index
+                target_assistant_count = current_count
+                candidate_replacements += 1
+                last_text = current_text
+                last_change = now
+            elif current_text != last_text:
                 last_text = current_text
                 last_change = now
 
@@ -578,6 +597,7 @@ def _chatgpt_send_and_wait(
                     "response_turn_id": current_turn_id,
                     "response_turn_index": current_turn_index,
                     "response_source": "chatgpt-strict",
+                    "response_candidate_replacements": candidate_replacements,
                     "response_duration_ms": int(
                         (now - started) * 1000
                     ),
@@ -591,6 +611,7 @@ def _chatgpt_send_and_wait(
             response_text=last_text,
             response_turn_id=target_turn_id,
             response_turn_index=target_turn_index,
+            response_candidate_replacements=candidate_replacements,
             pre_msg_count=pre_assistant_count,
             pre_user_count=pre_user_count,
             post_user_count=int(
