@@ -386,6 +386,30 @@ def _run_interactive_relay(
                 current_limit = status.get("rounds_requested", 0)
 
                 if awaiting_extension_total:
+                    if command in ("n", "no", ""):
+                        session.finish_at_round_limit()
+                        print(
+                            "Round limit accepted. "
+                            "Finishing the relay cleanly."
+                        )
+                        awaiting_extension_total = False
+                        continue
+
+                    if command in ("q", "x", "stop"):
+                        message = _handle_relay_command(command, session)
+                        if message:
+                            print(message)
+                        awaiting_extension_total = False
+                        continue
+
+                    if command.startswith("extend chat "):
+                        message = _handle_relay_command(command, session)
+                        if message:
+                            print(message)
+                        awaiting_extension_total = False
+                        round_limit_prompted = False
+                        continue
+
                     try:
                         new_total = int(command)
                     except ValueError:
