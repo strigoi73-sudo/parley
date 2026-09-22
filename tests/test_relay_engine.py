@@ -393,18 +393,34 @@ class BidirectionalRelayTests(unittest.TestCase):
         )
         self.assertEqual(result["stage"], "read_a")
 
-    def test_test_protocol_reset_reply_stops_relay_cleanly(self):
+    def test_test_protocol_reset_reply_propagates_once_and_stops(self):
+        calls = []
+
         def send_and_wait(tab_id, text, **kwargs):
-            self.assertEqual(tab_id, "B")
+            calls.append((tab_id, text, kwargs))
+            if len(calls) == 1:
+                self.assertEqual(tab_id, "B")
+                self.assertEqual(
+                    kwargs.get("expected_reply_prefix"),
+                    "B REPLY:",
+                )
+                self.assertEqual(
+                    kwargs.get("expected_reply_suffix"),
+                    "B REPLY END",
+                )
+                return completed_reply("RESET CHAT", "b-reset", 0)
+
+            self.assertEqual(tab_id, "A")
+            self.assertEqual(text, "RESET CHAT")
             self.assertEqual(
                 kwargs.get("expected_reply_prefix"),
-                "B REPLY:",
+                "A REPLY:",
             )
             self.assertEqual(
                 kwargs.get("expected_reply_suffix"),
-                "B REPLY END",
+                "A REPLY END",
             )
-            return completed_reply("RESET CHAT", "b-reset", 0)
+            return completed_reply("RESET CHAT", "a-reset", 1)
 
         result = run_bidirectional_relay(
             "A",
@@ -421,8 +437,97 @@ class BidirectionalRelayTests(unittest.TestCase):
         self.assertEqual(result["status"], "stopped")
         self.assertTrue(result["reset_requested"])
         self.assertEqual(result["reset_by"], "B")
-        self.assertEqual(result["stage"], "a_to_b")
+        self.assertTrue(result["reset_propagated"])
+        self.assertEqual(result["reset_acknowledged_by"], "A")
+        self.assertEqual(result["restart_point"], "A")
+        self.assertTrue(result["awaiting_human_restart"])
+        self.assertEqual(result["stage"], "reset")
         self.assertEqual(result["rounds_completed"], 0)
+        self.assertEqual(len(result["transfers"]), 0)
+        self.assertEqual(len(calls), 2)
+        self.assertTrue(
+            any(
+                item["event"] == "relay_reset_propagated"
+                for item in result["audit"]
+            )
+        )
+
+    def test_a_reset_reply_propagates_once_to_b(self):
+        calls = []
+
+        def send_and_wait(tab_id, text, **kwargs):
+            calls.append((tab_id, text, kwargs))
+            if len(calls) == 1:
+                return completed_reply(
+                    "B REPLY: response from B\n\nB REPLY END",
+                    "b1",
+                    0,
+                )
+            if len(calls) == 2:
+                return completed_reply("RESET CHAT", "a-reset", 1)
+
+            self.assertEqual(tab_id, "B")
+            self.assertEqual(text, "RESET CHAT")
+            self.assertEqual(
+                kwargs.get("expected_reply_prefix"),
+                "B REPLY:",
+            )
+            self.assertEqual(
+                kwargs.get("expected_reply_suffix"),
+                "B REPLY END",
+            )
+            return completed_reply("RESET CHAT", "b-reset", 1)
+
+        result = run_bidirectional_relay(
+            "A",
+            "B",
+            1,
+            read_response=lambda _: strict_turn(
+                "A REPLY: starting answer\n\nA REPLY END",
+                "a1",
+                0,
+            ),
+            send_and_wait=send_and_wait,
+        )
+
+        self.assertEqual(result["status"], "stopped")
+        self.assertEqual(result["reset_by"], "A")
+        self.assertEqual(result["reset_acknowledged_by"], "B")
+        self.assertTrue(result["reset_propagated"])
+        self.assertEqual(result["restart_point"], "A")
+        self.assertEqual(len(result["transfers"]), 1)
+        self.assertEqual(len(calls), 3)
+
+    def test_reset_propagation_fails_closed_without_exact_ack(self):
+        calls = []
+
+        def send_and_wait(tab_id, text, **kwargs):
+            calls.append((tab_id, text))
+            if len(calls) == 1:
+                return completed_reply("RESET CHAT", "b-reset", 0)
+            return completed_reply(
+                "A REPLY: not reset\n\nA REPLY END",
+                "a2",
+                1,
+            )
+
+        result = run_bidirectional_relay(
+            "A",
+            "B",
+            1,
+            read_response=lambda _: strict_turn(
+                "A REPLY: starting answer\n\nA REPLY END",
+                "a1",
+                0,
+            ),
+            send_and_wait=send_and_wait,
+        )
+
+        self.assertEqual(result["status"], "error")
+        self.assertEqual(result["error"], "relay_reset_propagation_failed")
+        self.assertTrue(result["reset_requested"])
+        self.assertFalse(result["reset_propagated"])
+        self.assertEqual(result["restart_point"], "A")
         self.assertEqual(len(result["transfers"]), 0)
 
     def test_workflows_bridge_delegates_to_relay_engine(self):
