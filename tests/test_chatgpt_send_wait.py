@@ -32,7 +32,13 @@ class ChatGPTSendAndWaitTests(unittest.TestCase):
     def setUp(self):
         self.adapter = ChatGPTAdapter()
 
-    def run_transaction(self, states, timeout_ms=3000, silence_ms=200):
+    def run_transaction(
+        self,
+        states,
+        timeout_ms=3000,
+        silence_ms=200,
+        expected_reply_prefix=None,
+    ):
         ws = FakeSocket()
         clock = FakeClock()
         state_queue = list(states)
@@ -87,6 +93,7 @@ class ChatGPTSendAndWaitTests(unittest.TestCase):
                 wait_timeout_ms=timeout_ms,
                 silence_ms=silence_ms,
                 adapter=self.adapter,
+                expected_reply_prefix=expected_reply_prefix,
             )
 
         return result, ws, connect, calls
@@ -487,6 +494,74 @@ class ChatGPTSendAndWaitTests(unittest.TestCase):
             "user-other",
         )
 
+    def test_marked_reply_ignores_thinking_and_temporary_old_turn(self):
+        old = {
+            "ok": True,
+            "source": "chatgpt-strict",
+            "assistant_count": 1,
+            "user_count": 1,
+            "assistant": {
+                "text": "A REPLY: old answer",
+                "turn_id": "assistant-old",
+                "turn_index": 0,
+                "hasStreaming": False,
+            },
+            "user": {
+                "text": "old prompt",
+                "turn_id": "user-old",
+                "turn_index": 0,
+            },
+            "hasStopButton": False,
+        }
+        submitted = {
+            **old,
+            "user_count": 2,
+            "user": {
+                "text": "hello",
+                "turn_id": "user-submitted",
+                "turn_index": 1,
+            },
+        }
+        thinking = {
+            **submitted,
+            "assistant_count": 2,
+            "assistant": {
+                "text": "Thinking",
+                "turn_id": "assistant-thinking",
+                "turn_index": 1,
+                "hasStreaming": True,
+            },
+            "hasStopButton": True,
+        }
+        rollback = {
+            **submitted,
+            "assistant_count": 1,
+            "assistant": old["assistant"],
+            "hasStopButton": False,
+        }
+        final = {
+            **submitted,
+            "assistant_count": 2,
+            "assistant": {
+                "text": "B REPLY: final answer",
+                "turn_id": "assistant-final",
+                "turn_index": 1,
+                "hasStreaming": False,
+            },
+            "hasStopButton": False,
+        }
+
+        result, _, _, _ = self.run_transaction(
+            [old, submitted, thinking, rollback, final, final],
+            silence_ms=200,
+            expected_reply_prefix="B REPLY:",
+        )
+
+        self.assertTrue(result["response_complete"])
+        self.assertEqual(result["response_text"], "B REPLY: final answer")
+        self.assertEqual(result["response_turn_id"], "assistant-final")
+        self.assertEqual(result["expected_reply_prefix"], "B REPLY:")
+
     def test_dispatcher_routes_chatgpt_to_strict_transaction(self):
         expected = {
             "response_text": "reply",
@@ -515,6 +590,7 @@ class ChatGPTSendAndWaitTests(unittest.TestCase):
             wait_timeout_ms=1234,
             silence_ms=321,
             adapter=self.adapter,
+            expected_reply_prefix=None,
         )
 
 
