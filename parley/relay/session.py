@@ -97,6 +97,9 @@ class RelaySession:
     def extend_rounds(self, new_total):
         return self.control.extend_round_limit(new_total)
 
+    def request_reset(self, label):
+        return self.control.request_reset(label)
+
     def finish_at_round_limit(self):
         self.control.finish_at_round_limit()
 
