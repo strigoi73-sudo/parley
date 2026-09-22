@@ -281,24 +281,32 @@ def _run_interactive_relay(
 
     seen_transfers = 0
 
-    while session.is_alive():
-        status = session.status()
-        transfer_count = status["transfers_completed"]
+    try:
+        while session.is_alive():
+            status = session.status()
+            transfer_count = status["transfers_completed"]
 
-        if transfer_count > seen_transfers:
-            last_transfer = status.get("last_transfer")
-            _print_transfer_progress(last_transfer)
-            seen_transfers = transfer_count
+            if transfer_count > seen_transfers:
+                last_transfer = status.get("last_transfer")
+                _print_transfer_progress(last_transfer)
+                seen_transfers = transfer_count
 
-        try:
-            command = commands.get(timeout=0.2)
-        except queue.Empty:
-            sleep(0)
-            continue
+            try:
+                command = commands.get(timeout=0.2)
+            except queue.Empty:
+                sleep(0)
+                continue
 
-        message = _handle_relay_command(command, session)
-        if message:
-            print(message)
+            message = _handle_relay_command(command, session)
+            if message:
+                print(message)
+    except KeyboardInterrupt:
+        print()
+        print(
+            "Interrupt received. Requesting safe stop after the "
+            "current browser transaction."
+        )
+        session.stop()
 
     result = session.join()
 
