@@ -38,6 +38,7 @@ class ChatGPTSendAndWaitTests(unittest.TestCase):
         timeout_ms=3000,
         silence_ms=200,
         expected_reply_prefix=None,
+        expected_reply_suffix=None,
     ):
         ws = FakeSocket()
         clock = FakeClock()
@@ -94,6 +95,7 @@ class ChatGPTSendAndWaitTests(unittest.TestCase):
                 silence_ms=silence_ms,
                 adapter=self.adapter,
                 expected_reply_prefix=expected_reply_prefix,
+                expected_reply_suffix=expected_reply_suffix,
             )
 
         return result, ws, connect, calls
@@ -539,11 +541,25 @@ class ChatGPTSendAndWaitTests(unittest.TestCase):
             "assistant": old["assistant"],
             "hasStopButton": False,
         }
+        partial_marked = {
+            **submitted,
+            "assistant_count": 2,
+            "assistant": {
+                "text": "B REPLY: final answer is still being rendered",
+                "turn_id": "assistant-final",
+                "turn_index": 1,
+                "hasStreaming": False,
+            },
+            "hasStopButton": False,
+        }
         final = {
             **submitted,
             "assistant_count": 2,
             "assistant": {
-                "text": "B REPLY: final answer",
+                "text": (
+                    "B REPLY: final answer is complete\n\n"
+                    "B REPLY END"
+                ),
                 "turn_id": "assistant-final",
                 "turn_index": 1,
                 "hasStreaming": False,
@@ -552,15 +568,28 @@ class ChatGPTSendAndWaitTests(unittest.TestCase):
         }
 
         result, _, _, _ = self.run_transaction(
-            [old, submitted, thinking, rollback, final, final],
+            [
+                old,
+                submitted,
+                thinking,
+                rollback,
+                partial_marked,
+                final,
+                final,
+            ],
             silence_ms=200,
             expected_reply_prefix="B REPLY:",
+            expected_reply_suffix="B REPLY END",
         )
 
         self.assertTrue(result["response_complete"])
-        self.assertEqual(result["response_text"], "B REPLY: final answer")
+        self.assertEqual(
+            result["response_text"],
+            "B REPLY: final answer is complete\n\nB REPLY END",
+        )
         self.assertEqual(result["response_turn_id"], "assistant-final")
         self.assertEqual(result["expected_reply_prefix"], "B REPLY:")
+        self.assertEqual(result["expected_reply_suffix"], "B REPLY END")
 
     def test_dispatcher_routes_chatgpt_to_strict_transaction(self):
         expected = {
@@ -591,6 +620,7 @@ class ChatGPTSendAndWaitTests(unittest.TestCase):
             silence_ms=321,
             adapter=self.adapter,
             expected_reply_prefix=None,
+            expected_reply_suffix=None,
         )
 
 
