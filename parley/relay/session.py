@@ -22,7 +22,7 @@ class RelaySession:
         self.tab_b = tab_b
         self.rounds = rounds
         self.include_text = include_text
-        self.control = RelayControl()
+        self.control = RelayControl(round_limit=rounds)
 
         self._lock = threading.Lock()
         self._thread = None
@@ -88,6 +88,9 @@ class RelaySession:
     def stop(self):
         self.control.stop()
 
+    def extend_rounds(self, new_total):
+        return self.control.extend_round_limit(new_total)
+
     def is_alive(self):
         with self._lock:
             thread = self._thread
@@ -134,7 +137,11 @@ class RelaySession:
             "control": self.control.state,
             "tab_a": self.tab_a,
             "tab_b": self.tab_b,
-            "rounds_requested": self.rounds,
+            "rounds_requested": (
+                self.control.round_limit
+                if self.control.round_limit is not None
+                else self.rounds
+            ),
             "rounds_completed": rounds_completed,
             "transfers_completed": len(transfers),
             "last_transfer": last_transfer,
