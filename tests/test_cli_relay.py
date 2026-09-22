@@ -86,6 +86,36 @@ class RelayCLITests(unittest.TestCase):
         )
         session.stop.assert_called_once()
 
+    def test_extend_chat_command_raises_total_round_limit(self):
+        session = mock.Mock()
+        session.status.return_value = {"rounds_requested": 2}
+        session.extend_rounds.return_value = 5
+
+        message = cli._handle_relay_command(
+            "EXTEND CHAT 5",
+            session,
+        )
+
+        session.extend_rounds.assert_called_once_with(5)
+        self.assertEqual(message, "Round limit extended to 5.")
+
+    def test_extend_chat_command_rejects_non_extension(self):
+        session = mock.Mock()
+        session.status.return_value = {"rounds_requested": 4}
+
+        message = cli._handle_relay_command(
+            "EXTEND CHAT 4",
+            session,
+        )
+
+        session.extend_rounds.assert_not_called()
+        self.assertIn("already 4", message)
+
+    def test_select_rounds_reprompts_until_positive_integer(self):
+        answers = iter(["nope", "0", "3"])
+        rounds = cli._select_rounds(input_fn=lambda _: next(answers))
+        self.assertEqual(rounds, 3)
+
     def test_cmd_relay_accepts_numbered_selection(self):
         tabs = [
             {
@@ -131,6 +161,53 @@ class RelayCLITests(unittest.TestCase):
             session,
             input_stream=None,
             output_json=False,
+        )
+
+    def test_cmd_relay_prompts_for_rounds_when_option_omitted(self):
+        tabs = [
+            {
+                "id": "TAB-A",
+                "title": "Chat A",
+                "url": "https://chatgpt.com/c/a",
+            },
+            {
+                "id": "TAB-B",
+                "title": "Chat B",
+                "url": "https://chatgpt.com/c/b",
+            },
+        ]
+        prompts = []
+        answers = iter(["4"])
+
+        def input_fn(prompt):
+            prompts.append(prompt)
+            return next(answers)
+
+        with mock.patch.object(
+            cli,
+            "_chatgpt_tabs",
+            return_value=tabs,
+        ), mock.patch.object(
+            cli,
+            "RelaySession",
+        ) as session_cls, mock.patch.object(
+            cli,
+            "_run_interactive_relay",
+            return_value=0,
+        ):
+            code = cli.cmd_relay(
+                ["1", "2"],
+                input_fn=input_fn,
+            )
+
+        self.assertEqual(code, 0)
+        self.assertIn("Number of rounds: ", prompts)
+        session_cls.assert_called_once_with(
+            cli.workflows.bridge,
+            "TAB-A",
+            "TAB-B",
+            4,
+            include_text=False,
         )
 
     def test_cmd_relay_rejects_same_tab(self):
@@ -234,6 +311,19 @@ class RelaySessionTests(unittest.TestCase):
         status = session.status()
         self.assertEqual(status["rounds_completed"], 1)
         self.assertEqual(status["transfers_completed"], 2)
+
+    def test_session_extend_rounds_updates_status(self):
+        session = RelaySession(
+            mock.Mock(),
+            "A",
+            "B",
+            2,
+        )
+
+        updated = session.extend_rounds(5)
+
+        self.assertEqual(updated, 5)
+        self.assertEqual(session.status()["rounds_requested"], 5)
 
     def test_session_control_methods_delegate(self):
         session = RelaySession(
