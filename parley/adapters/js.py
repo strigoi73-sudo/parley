@@ -497,11 +497,11 @@ def make_mutation_observer_js(timeout_ms, silence_ms, initial_msg_count=0, prev_
             let msgs = document.querySelectorAll('[data-message-author-role="assistant"]');
             if (msgs.length > 0) return msgs[msgs.length - 1].innerText;
             msgs = document.querySelectorAll('article[data-turn="assistant"]');
-            if (msgs.length > 0) {
+            if (msgs.length > 0) {{
                 const last = msgs[msgs.length - 1];
                 const content = last.querySelector('[data-message-author-role="assistant"] .markdown, .markdown, .markdown-new-styling') || last;
                 return (content.innerText || content.textContent || '').trim();
-            }
+            }}
             msgs = document.querySelectorAll('.agent-turn');
             if (msgs.length > 0) return msgs[msgs.length - 1].innerText;
             msgs = document.querySelectorAll('model-response');
