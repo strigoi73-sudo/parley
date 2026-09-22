@@ -316,6 +316,9 @@ def _chatgpt_eval(ws, expression, should_stop=None):
         timeout=None,
         should_stop=should_stop,
     )
+    if isinstance(raw, dict) and raw.get("error") == "stopped":
+        return {"ok": False, "error": "stopped"}
+
     value = _runtime_value(raw)
     if not isinstance(value, dict):
         return {
@@ -488,7 +491,7 @@ def _chatgpt_send_and_wait(
             return False
         return until is None or time.monotonic() < until
 
-    ws = cdp_connect(tab_id)
+    ws = cdp_connect(tab_id, timeout=None)
     if not ws:
         return {
             "error": "cannot_connect_to_tab",
