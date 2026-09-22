@@ -307,6 +307,19 @@ class LiveTabConnection:
     def settimeout(self, timeout):
         self._timeout = timeout
 
+    def reconnect(self):
+        """Reconnect the browser if needed and reattach this target in place."""
+        if self._closed:
+            return False
+        try:
+            self.session_id = self._manager.attach(
+                self.tab_id,
+                timeout=self._timeout,
+            )
+            return True
+        except Exception:
+            return False
+
     def close(self):
         if self._closed:
             return
