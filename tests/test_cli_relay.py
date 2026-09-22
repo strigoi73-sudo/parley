@@ -217,11 +217,48 @@ class RelayCLITests(unittest.TestCase):
         self.assertIn("Round limit extended to 3.", rendered)
 
     def test_select_initial_prompt_reprompts_until_nonblank(self):
-        answers = iter(["", "   ", "Start the discussion"])
+        answers = iter([
+            "   ",
+            "END PROMPT",
+            "Start the discussion",
+            "END PROMPT",
+        ])
         prompt = cli._select_initial_prompt(
             input_fn=lambda _: next(answers)
         )
         self.assertEqual(prompt, "Start the discussion")
+
+    def test_select_initial_prompt_preserves_multiline_paragraphs(self):
+        answers = iter([
+            "Pivot from Cthulhu to AGI.",
+            "",
+            "Build on the prior discussion.",
+            "END PROMPT",
+        ])
+        prompt = cli._select_initial_prompt(
+            input_fn=lambda _: next(answers)
+        )
+        self.assertEqual(
+            prompt,
+            (
+                "Pivot from Cthulhu to AGI.\n\n"
+                "Build on the prior discussion."
+            ),
+        )
+
+    def test_select_initial_prompt_flushes_console_on_interrupt(self):
+        def interrupted(_):
+            raise KeyboardInterrupt()
+
+        with mock.patch.object(
+            cli,
+            "_flush_pending_console_input",
+            return_value=True,
+        ) as flush:
+            with self.assertRaises(KeyboardInterrupt):
+                cli._select_initial_prompt(input_fn=interrupted)
+
+        flush.assert_called_once_with()
 
     def test_cmd_relay_prompt_a_sends_initial_prompt_before_session(self):
         tabs = [
@@ -236,7 +273,10 @@ class RelayCLITests(unittest.TestCase):
                 "url": "https://chatgpt.com/c/b",
             },
         ]
-        answers = iter(["Discuss whether Pluto is a planet."])
+        answers = iter([
+            "Discuss whether Pluto is a planet.",
+            "END PROMPT",
+        ])
 
         with mock.patch.object(
             cli,
@@ -325,7 +365,10 @@ class RelayCLITests(unittest.TestCase):
         ) as session_cls:
             code = cli.cmd_relay(
                 ["1", "2", "--rounds=2", "--prompt-a"],
-                input_fn=lambda _: "RESET CHAT",
+                input_fn=iter([
+                    "RESET CHAT",
+                    "END PROMPT",
+                ]).__next__,
             )
 
         self.assertEqual(code, 0)
@@ -376,7 +419,10 @@ class RelayCLITests(unittest.TestCase):
         ) as session_cls:
             code = cli.cmd_relay(
                 ["1", "2", "--rounds=2", "--prompt-a"],
-                input_fn=lambda _: "Start",
+                input_fn=iter([
+                    "Start",
+                    "END PROMPT",
+                ]).__next__,
             )
 
         self.assertEqual(code, 1)
