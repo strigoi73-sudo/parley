@@ -224,6 +224,7 @@ def run_bidirectional_relay(
         return result
 
     def checkpoint(stage, round_number=None):
+        resume_state = result["state"]
         was_paused = control.state == CONTROL_PAUSED
         if was_paused:
             transition(PAUSED)
@@ -233,7 +234,17 @@ def run_bidirectional_relay(
                 round=round_number,
             )
 
-        if not control.wait_until_runnable():
+        try:
+            runnable = control.wait_until_runnable()
+        except Exception as exc:
+            return fail(
+                "relay_control_exception",
+                stage,
+                round_number=round_number,
+                detail=str(exc),
+            )
+
+        if not runnable:
             return stopped(stage, round_number)
 
         if was_paused:
@@ -242,6 +253,7 @@ def run_bidirectional_relay(
                 stage=stage,
                 round=round_number,
             )
+            transition(resume_state)
         return None
 
     def validate(label, tab_id, stage, round_number=None):
