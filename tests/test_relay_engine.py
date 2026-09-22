@@ -248,6 +248,9 @@ class BidirectionalRelayTests(unittest.TestCase):
             2,
             read_response=workflows.read_response,
             send_and_wait=workflows.send_and_wait,
+            validate_tab=workflows._validate_chatgpt_tab,
+            control=None,
+            include_text=False,
         )
 
 

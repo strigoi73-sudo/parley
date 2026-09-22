@@ -638,6 +638,10 @@ Acceptance:
 
 ### Phase 5 — Safety and resilience
 
+Status: **Complete and locally verified (milestone verification passed on 2026-09-22)**
+
+Control semantics: pause/stop are cooperative at safe checkpoints between browser transactions. An in-flight `send_and_wait()` is allowed to finish or fail; stop then prevents any subsequent relay send.
+
 Deliverables:
 
 - duplicate guard;
@@ -697,9 +701,7 @@ Do not prioritize:
 
 ## 16. Immediate Next Step
 
-Phase 4 is implemented on `feature/bidirectional-relay` and awaits local milestone verification with `scripts/verify-phase4.ps1`.
-
-After Phase 4 passes, proceed to **Phase 5: Safety and resilience**. Keep that work separate from the already-verified relay sequencing.
+Phase 5 is complete and locally verified. Proceed to **Phase 6: CLI usability**. Before the first real end-to-end relay smoke test, complete the remaining production integration from Phase 1 so the CLI uses one persistent live Chrome debugging connection rather than repeated browser-level connections.
 
 ---
 
@@ -711,6 +713,6 @@ If work resumes in a future session, start here:
 2. Treat `main` as the inherited baseline.
 3. Treat `test/upstream-bridge-live` as the preserved empirical baseline showing the original bridge defects.
 4. Do not assume `feature/live-browser-attach` should be merged wholesale; it is an experimental source of proven ideas.
-5. Continue with **Phase 5: Safety and resilience** unless newer work in the repository supersedes this document.
+5. Continue with **Phase 6: CLI usability**. Before the first real end-to-end relay smoke test, complete the remaining Phase 1 production live-browser integration so the CLI uses one persistent live Chrome debugging connection.
 6. Before changing architecture, verify whether a newer planning document or merged implementation has replaced this one.
 
