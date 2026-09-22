@@ -259,7 +259,14 @@ class LiveBrowserManager:
 
 
 _MANAGER = LiveBrowserManager()
-atexit.register(_MANAGER.close)
+
+
+def close_live_browser_manager():
+    """Close the current process-wide live browser connection."""
+    _MANAGER.close()
+
+
+atexit.register(close_live_browser_manager)
 
 
 def live_browser_manager():
@@ -311,6 +318,11 @@ class LiveTabConnection:
         """Reconnect the browser if needed and reattach this target in place."""
         if self._closed:
             return False
+        old_session = self.session_id
+        try:
+            self._manager.detach(old_session)
+        except Exception:
+            pass
         try:
             self.session_id = self._manager.attach(
                 self.tab_id,
