@@ -153,5 +153,21 @@ class LiveBrowserTests(unittest.TestCase):
                 os.environ["PARLEY_CONNECTION_MODE"] = old
 
 
+class LiveCliTests(unittest.TestCase):
+    def test_live_flag_sets_connection_mode_before_listing(self):
+        from parley import cli
+
+        old = os.environ.pop("PARLEY_CONNECTION_MODE", None)
+        try:
+            with mock.patch.object(core, "list_tabs", return_value=[]):
+                cli.main(["parley", "--live", "list"])
+            self.assertEqual(os.environ.get("PARLEY_CONNECTION_MODE"), "live")
+        finally:
+            if old is None:
+                os.environ.pop("PARLEY_CONNECTION_MODE", None)
+            else:
+                os.environ["PARLEY_CONNECTION_MODE"] = old
+
+
 if __name__ == "__main__":
     unittest.main()
