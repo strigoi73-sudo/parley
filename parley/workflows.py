@@ -518,6 +518,7 @@ def _chatgpt_send_and_wait(
         # Submission is not considered successful until ChatGPT's DOM proves a
         # newer user turn exists.
         submitted_state = None
+        human_reset_requested = False
         last_submission_state = None
         submission_deadline = min(deadline, time.monotonic() + 10.0)
         while time.monotonic() < submission_deadline:
@@ -531,6 +532,10 @@ def _chatgpt_send_and_wait(
                 )
             if _chatgpt_has_new_user(pre_state, state, text):
                 submitted_state = state
+                break
+            if _chatgpt_has_new_user(pre_state, state, "RESET CHAT"):
+                submitted_state = state
+                human_reset_requested = True
                 break
             time.sleep(0.1)
 
@@ -586,8 +591,28 @@ def _chatgpt_send_and_wait(
                     )
 
                 if not _chatgpt_same_user_turn(submitted_state, state):
-                    submitted_user = submitted_state.get("user") or {}
                     current_user = state.get("user") or {}
+                    current_user_text = _normalize_chatgpt_text(
+                        current_user.get("text")
+                    )
+                    if (
+                        current_user_text == "RESET CHAT"
+                        and _chatgpt_has_new_user(
+                            submitted_state,
+                            state,
+                            "RESET CHAT",
+                        )
+                    ):
+                        submitted_state = state
+                        human_reset_requested = True
+                        candidate_seen = False
+                        last_identity = None
+                        last_text = ""
+                        last_change = time.monotonic()
+                        time.sleep(0.1)
+                        continue
+
+                    submitted_user = submitted_state.get("user") or {}
                     return fail(
                         "chatgpt_user_turn_changed_during_response",
                         "track_marked_response",
@@ -687,6 +712,7 @@ def _chatgpt_send_and_wait(
                         ),
                         "expected_reply_prefix": expected_prefix,
                         "expected_reply_suffix": expected_suffix,
+                        "human_reset_requested": human_reset_requested,
                         "response_duration_ms": int(
                             (now - started) * 1000
                         ),
