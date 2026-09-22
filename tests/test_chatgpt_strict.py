@@ -63,6 +63,25 @@ class StrictChatGPTExtractorTests(unittest.TestCase):
         self.assertIn("user:user", CHATGPT_GET_TURN_STATE_JS)
         self.assertNotIn("document.body.innerText", CHATGPT_GET_TURN_STATE_JS)
 
+    def test_mixed_turn_structures_are_merged_in_dom_order(self):
+        for script in (
+            CHATGPT_GET_RESPONSE_JS,
+            CHATGPT_GET_MSG_COUNT_JS,
+            CHATGPT_GET_TURN_STATE_JS,
+        ):
+            self.assertIn("collectTurns", script)
+            self.assertIn("compareDocumentPosition", script)
+            self.assertIn("role.closest('article')", script)
+
+        self.assertNotIn(
+            "assistantArticles.length || assistantRoles.length",
+            CHATGPT_GET_TURN_STATE_JS,
+        )
+        self.assertNotIn(
+            "userArticles.length || userRoles.length",
+            CHATGPT_GET_TURN_STATE_JS,
+        )
+
     def test_current_and_role_based_turn_structures_are_supported(self):
         for selector in (
             'article[data-turn="assistant"]',
