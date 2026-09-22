@@ -20,6 +20,7 @@ class RelayControl:
         self._confirm_round_limit = bool(confirm_round_limit)
         self._awaiting_round_extension = False
         self._finish_at_round_limit = False
+        self._reset_request = None
 
     @property
     def state(self):
@@ -76,6 +77,16 @@ class RelayControl:
             self._condition.notify_all()
             return self._round_limit
 
+    def request_reset(self, label):
+        """Wake a parked relay so the engine can coordinate RESET CHAT."""
+        label = str(label or "").strip().upper()
+        if label not in ("A", "B"):
+            raise ValueError("reset label must be A or B")
+        with self._condition:
+            self._reset_request = label
+            self._condition.notify_all()
+            return label
+
     def finish_at_round_limit(self):
         """Confirm that the relay should end at its current round ceiling."""
         with self._condition:
@@ -101,6 +112,12 @@ class RelayControl:
                 if self._state == STOPPED:
                     self._awaiting_round_extension = False
                     return "stopped"
+
+                if self._reset_request:
+                    label = self._reset_request
+                    self._reset_request = None
+                    self._awaiting_round_extension = False
+                    return "reset:%s" % label
 
                 if (
                     self._round_limit is not None
