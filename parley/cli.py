@@ -139,9 +139,21 @@ def _select_tab(label, tabs, input_fn=input):
         print("Invalid selection. Choose one of the listed ChatGPT tabs.")
 
 
+def _select_rounds(input_fn=input):
+    while True:
+        value = input_fn("Number of rounds: ").strip()
+        try:
+            rounds = int(value)
+        except ValueError:
+            rounds = 0
+        if rounds >= 1:
+            return rounds
+        print("Enter a whole number of rounds greater than zero.")
+
+
 def _parse_relay_args(parts):
     positional = []
-    rounds = 3
+    rounds = None
     include_text = False
     json_output = False
     i = 0
@@ -181,7 +193,7 @@ def _parse_relay_args(parts):
         raise ValueError(
             "relay accepts at most two tab references"
         )
-    if rounds < 1:
+    if rounds is not None and rounds < 1:
         raise ValueError("--rounds must be at least 1")
 
     return {
@@ -278,10 +290,37 @@ def _handle_relay_command(command, session):
     if command in ("s", "status"):
         return _status_line(session.status())
 
+    if command.startswith("extend chat "):
+        value = command[len("extend chat "):].strip()
+        try:
+            new_total = int(value)
+        except ValueError:
+            return "Usage: EXTEND CHAT <new total rounds>"
+
+        if new_total < 1:
+            return "Usage: EXTEND CHAT <new total rounds>"
+
+        current = session.status().get("rounds_requested", 0)
+        if new_total <= current:
+            return (
+                "Round limit is already %s. EXTEND CHAT must set a "
+                "higher total." % current
+            )
+
+        try:
+            updated = session.extend_rounds(new_total)
+        except ValueError as exc:
+            return "Could not extend chat: %s" % exc
+
+        return "Round limit extended to %d." % updated
+
     if not command:
         return None
 
-    return "Commands: p=pause, r=resume, s=status, q=stop"
+    return (
+        "Commands: p=pause, r=resume, s=status, q=stop, "
+        "EXTEND CHAT <new total rounds>"
+    )
 
 
 def _run_interactive_relay(
@@ -296,7 +335,10 @@ def _run_interactive_relay(
 
     session.start()
     print("Relay started.")
-    print("Commands: p=pause, r=resume, s=status, q=stop")
+    print(
+        "Commands: p=pause, r=resume, s=status, q=stop, "
+        "EXTEND CHAT <new total rounds>"
+    )
 
     commands = queue.Queue()
     reader = threading.Thread(
@@ -391,6 +433,9 @@ def cmd_relay(parts, input_fn=input, input_stream=None):
     if tab_a["id"] == tab_b["id"]:
         print("ChatGPT A and B must be different tabs.")
         return 1
+
+    if options["rounds"] is None:
+        options["rounds"] = _select_rounds(input_fn=input_fn)
 
     print()
     print("ChatGPT A: %s" % (tab_a.get("title") or tab_a["id"]))
