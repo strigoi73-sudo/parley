@@ -78,7 +78,8 @@ class StrictChatGPTExtractorTests(unittest.TestCase):
         ):
             self.assertIn("collectTurns", script)
             self.assertIn("compareDocumentPosition", script)
-            self.assertIn("role.closest('article')", script)
+            self.assertIn("role.closest(articleSelector)", script)
+            self.assertNotIn("role.closest('article')", script)
 
         self.assertNotIn(
             "assistantArticles.length || assistantRoles.length",
