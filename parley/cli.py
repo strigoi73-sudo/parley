@@ -38,6 +38,7 @@ import queue
 import sys
 import threading
 import time
+from urllib.parse import urlparse
 
 from . import core
 from . import workflows
@@ -55,16 +56,25 @@ def cmd_type(tab_id, text):
 
 
 def _chatgpt_tabs():
-    """Return only identifiable ChatGPT page targets."""
+    """Return only targets whose hostname is an approved ChatGPT host."""
     tabs = core.list_tabs()
     if isinstance(tabs, dict):
         return tabs
-    return [
-        tab for tab in tabs
-        if (tab.get("url") or "").startswith(
-            ("https://chatgpt.com", "https://chat.openai.com")
-        )
-    ]
+
+    allowed_hosts = {
+        "chatgpt.com",
+        "www.chatgpt.com",
+        "chat.openai.com",
+    }
+    result = []
+    for tab in tabs:
+        try:
+            host = (urlparse(tab.get("url") or "").hostname or "").lower()
+        except ValueError:
+            host = ""
+        if host in allowed_hosts:
+            result.append(tab)
+    return result
 
 
 def _print_chatgpt_tabs(tabs):
@@ -171,11 +181,16 @@ def _parse_relay_args(parts):
 
 
 def _status_line(status):
-    return (
+    line = (
         "status={status} state={state} control={control} "
         "rounds={rounds_completed}/{rounds_requested} "
         "transfers={transfers_completed}"
     ).format(**status)
+
+    last = status.get("last_transfer")
+    if last:
+        line += " last=round-{round}-{direction}".format(**last)
+    return line
 
 
 def _print_transfer_progress(item):
