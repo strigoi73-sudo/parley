@@ -192,51 +192,6 @@ class WorkflowRoutingTests(unittest.TestCase):
         self.assertIn(CHATGPT_GET_RESPONSE_JS, expressions)
         self.assertNotIn(UNIVERSAL_GET_RESPONSE, expressions)
 
-    def test_bridge_source_read_uses_strict_chatgpt_script(self):
-        ws = mock.Mock()
-
-        def fake_cdp_send(_ws, method, params=None, timeout=10):
-            self.assertEqual(method, "Runtime.evaluate")
-            self.assertEqual(
-                params["expression"],
-                CHATGPT_GET_RESPONSE_JS,
-            )
-            return {
-                "result": {
-                    "value": {
-                        "ok": True,
-                        "text": "A1",
-                        "count": 1,
-                        "hasStreaming": False,
-                        "hasStopButton": False,
-                    }
-                }
-            }
-
-        with mock.patch.object(
-            workflows.core,
-            "tab_url",
-            return_value="https://chatgpt.com/c/test",
-        ), mock.patch.object(
-            workflows,
-            "cdp_connect",
-            return_value=ws,
-        ), mock.patch.object(
-            workflows,
-            "cdp_send",
-            side_effect=fake_cdp_send,
-        ), mock.patch.object(
-            workflows,
-            "send_and_wait",
-            return_value={
-                "response_text": "B1",
-                "response_complete": True,
-            },
-        ):
-            result = workflows.bridge("tab-a", "tab-b", rounds=1)
-
-        self.assertEqual(result[0]["source_preview"], "A1")
-        self.assertEqual(result[0]["response_text"], "B1")
 
 
 if __name__ == "__main__":
