@@ -652,6 +652,45 @@ def run_bidirectional_relay(
         result["rounds_completed"] = round_number
         round_number += 1
 
+        if round_number > current_round_limit():
+            reached_limit = current_round_limit()
+            result["rounds_requested"] = reached_limit
+            record(
+                "relay_round_limit_reached",
+                round_limit=reached_limit,
+                rounds_completed=result["rounds_completed"],
+            )
+
+            waiter = getattr(
+                control,
+                "wait_for_round_limit_decision",
+                None,
+            )
+            if callable(waiter):
+                decision = waiter(result["rounds_completed"])
+            else:
+                decision = "finish"
+
+            if decision == "stopped":
+                return stopped(
+                    "round_limit",
+                    result["rounds_completed"],
+                )
+
+            if decision == "extended":
+                new_limit = current_round_limit()
+                result["rounds_requested"] = new_limit
+                record(
+                    "relay_round_limit_extended",
+                    previous_round_limit=reached_limit,
+                    round_limit=new_limit,
+                    round=round_number,
+                )
+                observed_round_limit = new_limit
+                continue
+
+            break
+
     result["rounds_requested"] = current_round_limit()
     transition(COMPLETE)
     result["status"] = "complete"
