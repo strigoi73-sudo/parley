@@ -165,6 +165,31 @@ class WorkflowRoutingTests(unittest.TestCase):
         self.assertNotEqual(response_js, UNIVERSAL_GET_RESPONSE)
         self.assertNotEqual(count_js, UNIVERSAL_GET_MSG_COUNT)
 
+    def test_read_turn_state_uses_strict_chatgpt_script(self):
+        expected = {
+            "ok": True,
+            "source": "chatgpt-strict",
+            "user_count": 1,
+            "assistant_count": 1,
+        }
+
+        with mock.patch.object(
+            workflows.core,
+            "tab_url",
+            return_value="https://chatgpt.com/c/test",
+        ), mock.patch.object(
+            workflows.core,
+            "evaluate",
+            return_value=expected,
+        ) as evaluate:
+            result = workflows.read_turn_state("tab-a")
+
+        self.assertEqual(result, expected)
+        evaluate.assert_called_once_with(
+            "tab-a",
+            CHATGPT_GET_TURN_STATE_JS,
+        )
+
     def test_read_response_uses_strict_chatgpt_script(self):
         expected = {
             "ok": True,
