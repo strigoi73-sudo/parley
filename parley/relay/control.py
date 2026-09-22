@@ -72,6 +72,7 @@ class RelayControl:
                 )
             self._round_limit = new_total
             self._finish_at_round_limit = False
+            self._awaiting_round_extension = False
             self._condition.notify_all()
             return self._round_limit
 
