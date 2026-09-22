@@ -362,8 +362,8 @@ def _chatgpt_has_new_user(pre_state, current_state, expected_text):
             else None
         )
 
-        if current_id and previous_id:
-            return current_id != previous_id
+        if current_id and previous_id and current_id != previous_id:
+            return True
 
         if previous is None:
             return True
@@ -518,9 +518,11 @@ def _chatgpt_send_and_wait(
         # Submission is not considered successful until ChatGPT's DOM proves a
         # newer user turn exists.
         submitted_state = None
+        last_submission_state = None
         submission_deadline = min(deadline, time.monotonic() + 10.0)
         while time.monotonic() < submission_deadline:
             state = _chatgpt_state(ws, adapter)
+            last_submission_state = state
             if not state.get("ok"):
                 return fail(
                     state.get("error", "chatgpt_state_failed"),
@@ -533,10 +535,27 @@ def _chatgpt_send_and_wait(
             time.sleep(0.1)
 
         if submitted_state is None:
+            observed_user = (
+                (last_submission_state or {}).get("user") or {}
+            )
+            observed_text = _normalize_chatgpt_text(
+                observed_user.get("text")
+            )
+            expected_text = _normalize_chatgpt_text(text)
             return fail(
                 "chatgpt_submission_not_verified",
                 "verify_submission",
                 pre_user_count=pre_user_count,
+                observed_user_count=int(
+                    (last_submission_state or {}).get("user_count", 0)
+                    or 0
+                ),
+                observed_user_turn_id=observed_user.get("turn_id"),
+                observed_user_chars=len(observed_text),
+                expected_user_chars=len(expected_text),
+                expected_user_text_match=bool(
+                    expected_text and observed_text == expected_text
+                ),
             )
 
         # Test-protocol mode uses an explicit final-reply marker as positive
