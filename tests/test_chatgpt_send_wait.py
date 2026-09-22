@@ -46,8 +46,14 @@ class ChatGPTSendAndWaitTests(unittest.TestCase):
         state_queue = list(states)
         calls = []
 
-        def fake_cdp_send(_ws, method, params=None, timeout=10):
-            calls.append((method, params))
+        def fake_cdp_send(
+            _ws,
+            method,
+            params=None,
+            timeout=10,
+            should_stop=None,
+        ):
+            calls.append((method, params, timeout, should_stop))
             if method == "Input.insertText":
                 return {}
 
@@ -101,6 +107,60 @@ class ChatGPTSendAndWaitTests(unittest.TestCase):
             )
 
         return result, ws, connect, calls
+
+    def test_strict_transaction_uses_no_cdp_command_deadlines(self):
+        old = {
+            "ok": True,
+            "source": "chatgpt-strict",
+            "assistant_count": 1,
+            "user_count": 1,
+            "assistant": {
+                "text": "old reply",
+                "turn_id": "assistant-old",
+                "turn_index": 0,
+                "hasStreaming": False,
+            },
+            "user": {
+                "text": "old prompt",
+                "turn_id": "user-old",
+                "turn_index": 0,
+            },
+            "hasStopButton": False,
+        }
+        submitted = {
+            **old,
+            "user_count": 2,
+            "user": {
+                "text": "hello",
+                "turn_id": "user-new",
+                "turn_index": 1,
+            },
+        }
+        final = {
+            **submitted,
+            "assistant_count": 2,
+            "assistant": {
+                "text": "B REPLY: complete\n\nB REPLY END",
+                "turn_id": "assistant-new",
+                "turn_index": 1,
+                "hasStreaming": False,
+            },
+        }
+
+        result, _, _, calls = self.run_transaction(
+            [old, submitted, final, final],
+            timeout_ms=None,
+            silence_ms=0,
+            expected_reply_prefix="B REPLY:",
+            expected_reply_suffix="B REPLY END",
+            should_stop=lambda: False,
+        )
+
+        self.assertTrue(result["response_complete"])
+        self.assertTrue(calls)
+        for _, _, timeout, should_stop in calls:
+            self.assertIsNone(timeout)
+            self.assertTrue(callable(should_stop))
 
     def test_timeout_free_marked_wait_stops_only_on_control_signal(self):
         pre = {
@@ -195,7 +255,7 @@ class ChatGPTSendAndWaitTests(unittest.TestCase):
             silence_ms=200,
         )
 
-        connect.assert_called_once_with("tab-a")
+        connect.assert_called_once_with("tab-a", timeout=None)
         self.assertTrue(ws.closed)
         self.assertTrue(result["response_complete"])
         self.assertEqual(result["response_text"], "new reply")
