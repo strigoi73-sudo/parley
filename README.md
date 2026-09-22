@@ -148,30 +148,43 @@ cd parley
 pip install -r requirements.txt
 ```
 
-### 1. Start your browser with CDP enabled
+### 1. Enable live debugging in your normal Chrome
 
-Parley talks to a browser that has remote debugging turned on. Use the helper:
+For the primary two-ChatGPT relay workflow, Parley attaches to your already-running,
+signed-in Chrome session.
 
-```bash
-./scripts/start-browser.sh
+Open:
+
+```text
+chrome://inspect/#remote-debugging
 ```
 
-Or launch it yourself (re-uses your normal profile, so you stay logged in):
+Enable remote debugging there. Chrome may ask you to approve Parley's connection
+when the process first attaches. Parley keeps one browser-level debugging
+connection open for that process so normal relay operation does not reconnect
+for every message.
 
-```bash
-brave-browser --remote-debugging-port=9222 --remote-allow-origins=*
-# or: google-chrome --remote-debugging-port=9222 --remote-allow-origins=*
-```
-
-Open tabs for the AIs you want to use (ChatGPT, Gemini, ...) and sign in.
+Open the two ChatGPT conversations you want to use.
 
 ### 2. Try it
 
-```bash
-python3 parley.py list
+```powershell
+python .\parley.py chats
 ```
 
-You should see your open tabs with their IDs.
+The `chats` and `relay` commands use live mode by default and should show
+your existing signed-in ChatGPT tabs.
+
+### Classic compatibility mode
+
+The inherited localhost CDP transport is still available for generic automation:
+
+```bash
+./scripts/start-browser.sh
+python3 parley.py --classic list
+```
+
+You can also force live mode for another command with `--live`.
 
 ## Usage (CLI)
 
@@ -309,8 +322,10 @@ python3 parley.py bridge <CHATGPT_ID> <GEMINI_ID> 4
 
 ## Troubleshooting
 
-- **`list` returns an error / empty** — the browser is not running with `--remote-debugging-port=9222`, or a different app is on that port. Restart via `scripts/start-browser.sh`.
-- **403 on connect** — make sure you launched with `--remote-allow-origins=*`.
+- **`chats` / `relay` cannot find live Chrome** — open `chrome://inspect/#remote-debugging` in your normal Chrome and enable remote debugging. If Chrome uses a nonstandard user-data directory, set `PARLEY_CHROME_USER_DATA_DIR`.
+- **Chrome shows "Allow remote debugging?"** — approve it only when you intentionally started Parley. One Parley process keeps one browser-level connection open, so you should not need to approve every relay message.
+- **Classic `list` returns an error / empty** — classic mode expects a browser launched with `--remote-debugging-port=9222`. Use `scripts/start-browser.sh`, or use `--live` instead.
+- **Classic mode gets 403 on connect** — make sure the separately launched browser allows the requested DevTools origin.
 - **Response looks empty or truncated** — the model may still be generating; prefer `send-wait` / `wait-stream`, which wait for completion.
 - **Gemini stops responding after a while** — Parley auto-recovers by reloading the tab (history is preserved). If it persists, reload the Gemini tab manually.
 - **Only the first message works on a service** — you are likely using it logged-out/anonymous (rate-limited). Sign in for full use.
