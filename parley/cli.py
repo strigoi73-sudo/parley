@@ -160,10 +160,26 @@ def _select_rounds(input_fn=input):
 
 
 def _select_initial_prompt(input_fn=input):
+    """Read a complete multiline initial prompt terminated explicitly."""
+    terminator = "END PROMPT"
+
     while True:
-        value = input_fn("Initial prompt: ").strip()
-        if value:
-            return value
+        print(
+            "Initial prompt (multiline; enter %s on its own line when done):"
+            % terminator
+        )
+        lines = []
+
+        while True:
+            value = input_fn("> ")
+            if value.strip() == terminator:
+                break
+            lines.append(value)
+
+        prompt = "\n".join(lines).strip()
+        if prompt:
+            return prompt
+
         print("Initial prompt cannot be blank.")
 
 
