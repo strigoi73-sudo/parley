@@ -795,6 +795,7 @@ def bridge(
     *,
     control=None,
     include_text=False,
+    event_sink=None,
 ):
     """Run a guarded bidirectional ChatGPT relay.
 
@@ -812,4 +813,5 @@ def bridge(
         validate_tab=_validate_chatgpt_tab,
         control=control,
         include_text=include_text,
+        event_sink=event_sink,
     )
