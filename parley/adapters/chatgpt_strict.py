@@ -225,7 +225,21 @@ function collectTurns(roleName) {
                   turn.querySelector(turns.roleSelector);
       }
     } else {
-      content = role || turn;
+      if (role) {
+        content = role.querySelector('.whitespace-pre-wrap') ||
+                  role.querySelector('[class*="whitespace-pre-wrap"]') ||
+                  role.querySelector('[class*="break-words"]') ||
+                  role;
+      }
+      if (!content && turn) {
+        content = turn.querySelector(
+                    turns.roleSelector + ' .whitespace-pre-wrap'
+                  ) ||
+                  turn.querySelector('[class*="whitespace-pre-wrap"]') ||
+                  turn.querySelector('[class*="break-words"]') ||
+                  turn.querySelector(turns.roleSelector) ||
+                  turn;
+      }
     }
 
     const text = content
