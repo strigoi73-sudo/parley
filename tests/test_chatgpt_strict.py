@@ -90,6 +90,20 @@ class WorkflowRoutingTests(unittest.TestCase):
                 UNIVERSAL_GET_MSG_COUNT,
             )
 
+    def test_unknown_tab_identity_fails_closed(self):
+        with mock.patch.object(
+            workflows.core,
+            "tab_url",
+            return_value="",
+        ):
+            response_js = workflows._response_js("missing-tab")
+            count_js = workflows._message_count_js("missing-tab")
+
+        self.assertIn("tab_url_unavailable", response_js)
+        self.assertIn("tab_url_unavailable", count_js)
+        self.assertNotEqual(response_js, UNIVERSAL_GET_RESPONSE)
+        self.assertNotEqual(count_js, UNIVERSAL_GET_MSG_COUNT)
+
     def test_read_response_uses_strict_chatgpt_script(self):
         expected = {
             "ok": True,
