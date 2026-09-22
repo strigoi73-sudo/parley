@@ -251,6 +251,7 @@ class BidirectionalRelayTests(unittest.TestCase):
             validate_tab=workflows._validate_chatgpt_tab,
             control=None,
             include_text=False,
+            event_sink=None,
         )
 
 
