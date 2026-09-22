@@ -268,8 +268,12 @@ class BidirectionalRelayTests(unittest.TestCase):
                     kwargs.get("expected_reply_prefix"),
                     "B REPLY:",
                 )
+                self.assertEqual(
+                    kwargs.get("expected_reply_suffix"),
+                    "B REPLY END",
+                )
                 return completed_reply(
-                    "B REPLY: response from B",
+                    "B REPLY: response from B\n\nB REPLY END",
                     "b1",
                     0,
                 )
@@ -277,8 +281,12 @@ class BidirectionalRelayTests(unittest.TestCase):
                 kwargs.get("expected_reply_prefix"),
                 "A REPLY:",
             )
+            self.assertEqual(
+                kwargs.get("expected_reply_suffix"),
+                "A REPLY END",
+            )
             return completed_reply(
-                "A REPLY: response from A",
+                "A REPLY: response from A\n\nA REPLY END",
                 "a2",
                 1,
             )
@@ -288,7 +296,7 @@ class BidirectionalRelayTests(unittest.TestCase):
             "B",
             1,
             read_response=lambda _: strict_turn(
-                "A REPLY: starting answer",
+                "A REPLY: starting answer\n\nA REPLY END",
                 "a1",
                 0,
             ),
@@ -303,9 +311,39 @@ class BidirectionalRelayTests(unittest.TestCase):
             "B REPLY:",
         )
         self.assertEqual(
+            calls[0][2]["expected_reply_suffix"],
+            "B REPLY END",
+        )
+        self.assertEqual(
             calls[1][2]["expected_reply_prefix"],
             "A REPLY:",
         )
+        self.assertEqual(
+            calls[1][2]["expected_reply_suffix"],
+            "A REPLY END",
+        )
+
+    def test_marked_initial_a_reply_requires_terminal_marker(self):
+        send = mock.Mock()
+        result = run_bidirectional_relay(
+            "A",
+            "B",
+            1,
+            read_response=lambda _: strict_turn(
+                "A REPLY: incomplete starting answer",
+                "a1",
+                0,
+            ),
+            send_and_wait=send,
+        )
+
+        send.assert_not_called()
+        self.assertEqual(result["status"], "error")
+        self.assertEqual(
+            result["error"],
+            "initial_test_reply_end_marker_missing",
+        )
+        self.assertEqual(result["stage"], "read_a")
 
     def test_test_protocol_reset_reply_stops_relay_cleanly(self):
         def send_and_wait(tab_id, text, **kwargs):
@@ -314,6 +352,10 @@ class BidirectionalRelayTests(unittest.TestCase):
                 kwargs.get("expected_reply_prefix"),
                 "B REPLY:",
             )
+            self.assertEqual(
+                kwargs.get("expected_reply_suffix"),
+                "B REPLY END",
+            )
             return completed_reply("RESET CHAT", "b-reset", 0)
 
         result = run_bidirectional_relay(
@@ -321,7 +363,7 @@ class BidirectionalRelayTests(unittest.TestCase):
             "B",
             1,
             read_response=lambda _: strict_turn(
-                "A REPLY: starting answer",
+                "A REPLY: starting answer\n\nA REPLY END",
                 "a1",
                 0,
             ),
