@@ -270,6 +270,22 @@ def _print_relay_summary(result):
             )
         )
 
+    if result.get("reset_requested"):
+        if result.get("reset_propagated"):
+            print(
+                "Reset coordinated: %s -> %s. Restart point: %s."
+                % (
+                    result.get("reset_by", "?"),
+                    result.get("reset_acknowledged_by", "?"),
+                    result.get("restart_point", "A"),
+                )
+            )
+        else:
+            print(
+                "Reset requested by %s but propagation was not confirmed."
+                % result.get("reset_by", "?")
+            )
+
 
 def _command_reader(command_queue, stream):
     """Read interactive commands without blocking relay completion."""
@@ -509,7 +525,18 @@ def _run_interactive_relay(
     _print_relay_summary(result)
     if output_json:
         _print(result)
-    return 0 if isinstance(result, dict) and result.get("status") == "complete" else 1
+    clean_result = bool(
+        isinstance(result, dict)
+        and (
+            result.get("status") == "complete"
+            or (
+                result.get("status") == "stopped"
+                and result.get("reset_requested")
+                and result.get("reset_propagated")
+            )
+        )
+    )
+    return 0 if clean_result else 1
 
 
 def cmd_relay(parts, input_fn=input, input_stream=None):
