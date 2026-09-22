@@ -1,15 +1,23 @@
-"""Deterministic two-ChatGPT relay engine.
+"""Safety-hardened deterministic two-ChatGPT relay engine.
 
-This module owns conversation sequencing only. Browser/CDP behavior and
-ChatGPT DOM extraction remain in their respective layers.
+This module owns conversation sequencing and relay-level safety only.
+Browser/CDP behavior and ChatGPT DOM extraction remain in their own layers.
 """
 
+from .audit import audit_event
+from .control import (
+    PAUSED as CONTROL_PAUSED,
+    RelayControl,
+)
+from .dedupe import DuplicateGuard, turn_text_hash
 from .state import (
     COMPLETE,
     ERROR,
     IDLE,
+    PAUSED,
     PREPARE,
     READ_A,
+    STOPPED,
     TRANSFER_A_TO_B,
     TRANSFER_B_TO_A,
 )
@@ -74,8 +82,9 @@ def _transfer_record(
     destination_tab,
     source_turn,
     response_turn,
+    include_text=False,
 ):
-    return {
+    record = {
         "round": round_number,
         "direction": direction,
         "source_tab": source_tab,
@@ -83,11 +92,55 @@ def _transfer_record(
         "source_turn_id": source_turn.get("turn_id"),
         "source_turn_index": source_turn.get("turn_index"),
         "source_chars": len(source_turn["text"]),
-        "source_text": source_turn["text"],
+        "source_hash": turn_text_hash(source_turn),
         "response_turn_id": response_turn.get("turn_id"),
         "response_turn_index": response_turn.get("turn_index"),
         "response_chars": len(response_turn["text"]),
-        "response_text": response_turn["text"],
+        "response_hash": turn_text_hash(response_turn),
+    }
+    if include_text:
+        record["source_text"] = source_turn["text"]
+        record["response_text"] = response_turn["text"]
+    return record
+
+
+def _validation_result(validate_tab, tab_id):
+    """Normalize an optional tab-validation callback."""
+    if validate_tab is None:
+        return {"ok": True}
+
+    try:
+        value = validate_tab(tab_id)
+    except Exception as exc:
+        return {
+            "ok": False,
+            "error": "relay_tab_validation_exception",
+            "detail": str(exc),
+        }
+
+    if value is True:
+        return {"ok": True}
+    if value is False or value is None:
+        return {
+            "ok": False,
+            "error": "relay_tab_validation_failed",
+        }
+    if isinstance(value, dict):
+        if value.get("ok"):
+            return value
+        return {
+            "ok": False,
+            "error": value.get(
+                "error",
+                "relay_tab_validation_failed",
+            ),
+            "detail": value,
+        }
+
+    return {
+        "ok": False,
+        "error": "relay_tab_validation_invalid_result",
+        "detail": repr(value),
     }
 
 
@@ -98,15 +151,28 @@ def run_bidirectional_relay(
     *,
     read_response,
     send_and_wait,
+    validate_tab=None,
+    control=None,
+    include_text=False,
 ):
-    """Run a deterministic A -> B -> A relay for a fixed number of rounds.
+    """Run a guarded A -> B -> A relay for a fixed number of rounds.
 
     One round is one full back-and-forth exchange:
         A(n) -> B => B(n)
         B(n) -> A => A(n+1)
 
-    Therefore N rounds always contain exactly 2N successful transfers.
+    Phase-5 safety properties:
+    - duplicate source turns are never delivered twice;
+    - pause/stop are checked between every externally visible operation;
+    - source/destination tabs may be validated before every transfer;
+    - callback failures become structured relay errors;
+    - audit records default to hashes/metadata rather than full message text.
     """
+    if control is None:
+        control = RelayControl()
+
+    guard = DuplicateGuard()
+
     result = {
         "status": "running",
         "state": IDLE,
@@ -116,11 +182,16 @@ def run_bidirectional_relay(
         "rounds_requested": rounds,
         "rounds_completed": 0,
         "transfers": [],
+        "audit": [],
     }
+
+    def record(event, **fields):
+        result["audit"].append(audit_event(event, **fields))
 
     def transition(state):
         result["state"] = state
-        result["state_history"].append(state)
+        if not result["state_history"] or result["state_history"][-1] != state:
+            result["state_history"].append(state)
 
     def fail(error, stage, round_number=None, detail=None):
         transition(ERROR)
@@ -131,9 +202,107 @@ def run_bidirectional_relay(
             result["round"] = round_number
         if detail is not None:
             result["detail"] = detail
+        record(
+            "relay_error",
+            error=error,
+            stage=stage,
+            round=round_number,
+        )
         return result
 
+    def stopped(stage, round_number=None):
+        transition(STOPPED)
+        result["status"] = "stopped"
+        result["stage"] = stage
+        if round_number is not None:
+            result["round"] = round_number
+        record(
+            "relay_stopped",
+            stage=stage,
+            round=round_number,
+        )
+        return result
+
+    def checkpoint(stage, round_number=None):
+        was_paused = control.state == CONTROL_PAUSED
+        if was_paused:
+            transition(PAUSED)
+            record(
+                "relay_paused",
+                stage=stage,
+                round=round_number,
+            )
+
+        if not control.wait_until_runnable():
+            return stopped(stage, round_number)
+
+        if was_paused:
+            record(
+                "relay_resumed",
+                stage=stage,
+                round=round_number,
+            )
+        return None
+
+    def validate(label, tab_id, stage, round_number=None):
+        checked = _validation_result(validate_tab, tab_id)
+        if not checked.get("ok"):
+            return fail(
+                checked.get("error", "relay_tab_validation_failed"),
+                stage,
+                round_number=round_number,
+                detail={
+                    "label": label,
+                    "tab_id": tab_id,
+                    "validation": checked,
+                },
+            )
+        record(
+            "tab_validated",
+            label=label,
+            tab_id=tab_id,
+            stage=stage,
+            round=round_number,
+        )
+        return None
+
+    def claim(source_tab, destination_tab, turn, direction, round_number):
+        ok, fingerprint = guard.claim(
+            source_tab,
+            destination_tab,
+            turn,
+        )
+        if not ok:
+            record(
+                "duplicate_blocked",
+                direction=direction,
+                round=round_number,
+                source_tab=source_tab,
+                destination_tab=destination_tab,
+                fingerprint=fingerprint,
+            )
+            return fail(
+                "relay_duplicate_source_turn",
+                direction.lower().replace("->", "_to_"),
+                round_number=round_number,
+                detail={
+                    "direction": direction,
+                    "fingerprint": fingerprint,
+                },
+            )
+        return fingerprint
+
+    record(
+        "relay_started",
+        tab_a=tab_a,
+        tab_b=tab_b,
+        rounds=rounds,
+    )
     transition(PREPARE)
+
+    checkpoint_result = checkpoint("prepare")
+    if checkpoint_result:
+        return checkpoint_result
 
     if not tab_a or not tab_b:
         return fail("relay_tab_missing", "prepare")
@@ -144,15 +313,97 @@ def run_bidirectional_relay(
     if not isinstance(rounds, int) or isinstance(rounds, bool) or rounds < 1:
         return fail("relay_rounds_must_be_positive_integer", "prepare")
 
+    for label, tab_id in (("A", tab_a), ("B", tab_b)):
+        validation_failure = validate(label, tab_id, "prepare")
+        if validation_failure:
+            return validation_failure
+
     transition(READ_A)
-    initial_raw = read_response(tab_a)
+    checkpoint_result = checkpoint("read_a")
+    if checkpoint_result:
+        return checkpoint_result
+
+    validation_failure = validate("A", tab_a, "read_a")
+    if validation_failure:
+        return validation_failure
+
+    try:
+        initial_raw = read_response(tab_a)
+    except Exception as exc:
+        return fail(
+            "relay_read_exception",
+            "read_a",
+            detail=str(exc),
+        )
+
     current_a, error = _initial_turn(initial_raw)
     if error:
         return fail(error, "read_a", detail=initial_raw)
 
+    record(
+        "initial_turn_read",
+        tab_id=tab_a,
+        turn_id=current_a.get("turn_id"),
+        turn_index=current_a.get("turn_index"),
+        chars=len(current_a["text"]),
+        text_hash=turn_text_hash(current_a),
+    )
+
+    current_b = None
+
     for round_number in range(1, rounds + 1):
         transition(TRANSFER_A_TO_B)
-        b_raw = send_and_wait(tab_b, current_a["text"])
+
+        checkpoint_result = checkpoint(
+            "a_to_b",
+            round_number,
+        )
+        if checkpoint_result:
+            return checkpoint_result
+
+        for label, tab_id in (("A", tab_a), ("B", tab_b)):
+            validation_failure = validate(
+                label,
+                tab_id,
+                "a_to_b",
+                round_number,
+            )
+            if validation_failure:
+                return validation_failure
+
+        fingerprint = claim(
+            tab_a,
+            tab_b,
+            current_a,
+            "A->B",
+            round_number,
+        )
+        if isinstance(fingerprint, dict):
+            return fingerprint
+
+        record(
+            "transfer_started",
+            round=round_number,
+            direction="A->B",
+            source_tab=tab_a,
+            destination_tab=tab_b,
+            source_turn_id=current_a.get("turn_id"),
+            source_turn_index=current_a.get("turn_index"),
+            source_chars=len(current_a["text"]),
+            source_hash=turn_text_hash(current_a),
+            fingerprint=fingerprint,
+        )
+
+        try:
+            b_raw = send_and_wait(tab_b, current_a["text"])
+        except Exception as exc:
+            return fail(
+                "relay_transfer_exception",
+                "a_to_b",
+                round_number=round_number,
+                detail=str(exc),
+            )
+
         current_b, error = _completed_reply(b_raw)
         if error:
             return fail(
@@ -162,19 +413,70 @@ def run_bidirectional_relay(
                 detail=b_raw,
             )
 
-        result["transfers"].append(
-            _transfer_record(
-                round_number,
-                "A->B",
-                tab_a,
-                tab_b,
-                current_a,
-                current_b,
-            )
+        transfer = _transfer_record(
+            round_number,
+            "A->B",
+            tab_a,
+            tab_b,
+            current_a,
+            current_b,
+            include_text=include_text,
         )
+        result["transfers"].append(transfer)
+        record("transfer_completed", **transfer)
 
         transition(TRANSFER_B_TO_A)
-        a_raw = send_and_wait(tab_a, current_b["text"])
+
+        checkpoint_result = checkpoint(
+            "b_to_a",
+            round_number,
+        )
+        if checkpoint_result:
+            return checkpoint_result
+
+        for label, tab_id in (("B", tab_b), ("A", tab_a)):
+            validation_failure = validate(
+                label,
+                tab_id,
+                "b_to_a",
+                round_number,
+            )
+            if validation_failure:
+                return validation_failure
+
+        fingerprint = claim(
+            tab_b,
+            tab_a,
+            current_b,
+            "B->A",
+            round_number,
+        )
+        if isinstance(fingerprint, dict):
+            return fingerprint
+
+        record(
+            "transfer_started",
+            round=round_number,
+            direction="B->A",
+            source_tab=tab_b,
+            destination_tab=tab_a,
+            source_turn_id=current_b.get("turn_id"),
+            source_turn_index=current_b.get("turn_index"),
+            source_chars=len(current_b["text"]),
+            source_hash=turn_text_hash(current_b),
+            fingerprint=fingerprint,
+        )
+
+        try:
+            a_raw = send_and_wait(tab_a, current_b["text"])
+        except Exception as exc:
+            return fail(
+                "relay_transfer_exception",
+                "b_to_a",
+                round_number=round_number,
+                detail=str(exc),
+            )
+
         next_a, error = _completed_reply(a_raw)
         if error:
             return fail(
@@ -184,16 +486,17 @@ def run_bidirectional_relay(
                 detail=a_raw,
             )
 
-        result["transfers"].append(
-            _transfer_record(
-                round_number,
-                "B->A",
-                tab_b,
-                tab_a,
-                current_b,
-                next_a,
-            )
+        transfer = _transfer_record(
+            round_number,
+            "B->A",
+            tab_b,
+            tab_a,
+            current_b,
+            next_a,
+            include_text=include_text,
         )
+        result["transfers"].append(transfer)
+        record("transfer_completed", **transfer)
 
         current_a = next_a
         result["rounds_completed"] = round_number
@@ -202,4 +505,9 @@ def run_bidirectional_relay(
     result["status"] = "complete"
     result["latest_a"] = current_a
     result["latest_b"] = current_b
+    record(
+        "relay_completed",
+        rounds_completed=result["rounds_completed"],
+        transfers=len(result["transfers"]),
+    )
     return result
