@@ -269,6 +269,7 @@ def _command_reader(command_queue, stream):
 
 def _handle_relay_command(command, session):
     """Apply one interactive command; return a user-facing message."""
+    command = str(command or "").strip().lower()
     if command in ("p", "pause"):
         session.pause()
         return (
