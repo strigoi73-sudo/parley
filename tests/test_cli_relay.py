@@ -363,12 +363,13 @@ class RelayCLITests(unittest.TestCase):
             cli,
             "RelaySession",
         ) as session_cls:
+            reset_answers = iter([
+                "RESET CHAT",
+                "END PROMPT",
+            ])
             code = cli.cmd_relay(
                 ["1", "2", "--rounds=2", "--prompt-a"],
-                input_fn=iter([
-                    "RESET CHAT",
-                    "END PROMPT",
-                ]).__next__,
+                input_fn=lambda _: next(reset_answers),
             )
 
         self.assertEqual(code, 0)
@@ -417,12 +418,13 @@ class RelayCLITests(unittest.TestCase):
             cli,
             "RelaySession",
         ) as session_cls:
+            failure_answers = iter([
+                "Start",
+                "END PROMPT",
+            ])
             code = cli.cmd_relay(
                 ["1", "2", "--rounds=2", "--prompt-a"],
-                input_fn=iter([
-                    "Start",
-                    "END PROMPT",
-                ]).__next__,
+                input_fn=lambda _: next(failure_answers),
             )
 
         self.assertEqual(code, 1)
