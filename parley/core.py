@@ -4,8 +4,10 @@ parley.core - Pure Chrome DevTools Protocol (CDP) engine.
 This layer is completely site-agnostic. It knows nothing about ChatGPT, Gemini
 or any AI chat UI. It provides:
 
-  * A CDP transport (HTTP tab discovery + WebSocket command channel) with
-    automatic reconnection.
+  * Two CDP transports:
+      - classic: HTTP tab discovery + per-tab WebSocket
+      - live: one persistent browser WebSocket + flattened Target sessions
+    with automatic reconnection.
   * Generic browser-automation primitives that work on ANY website:
     evaluate JS, read DOM text, extract elements, wait for a selector,
     click, type, navigate, and read cookies.
@@ -22,6 +24,13 @@ import urllib.error
 
 import websocket
 
+from .live_browser import (
+    LiveTabConnection,
+    chrome_user_data_dir,
+    live_devtools_endpoint,
+    live_target_infos,
+)
+
 CDP_HOST = os.environ.get("PARLEY_CDP_HOST", "localhost")
 CDP_PORT = int(os.environ.get("PARLEY_CDP_PORT", "9222"))
 CDP_HTTP = f"http://{CDP_HOST}:{CDP_PORT}"
@@ -29,6 +38,24 @@ CDP_HTTP = f"http://{CDP_HOST}:{CDP_PORT}"
 # Maximum reconnect attempts for WebSocket connections
 MAX_RECONNECT = 3
 RECONNECT_DELAY = 1
+
+
+# ============================================================================
+# CONNECTION MODE
+# ============================================================================
+
+def connection_mode():
+    """Return the configured transport: classic or live."""
+    mode = os.environ.get(
+        "PARLEY_CONNECTION_MODE",
+        "classic",
+    ).strip().lower()
+    if mode not in ("classic", "live"):
+        raise ValueError(
+            "PARLEY_CONNECTION_MODE must be 'classic' or 'live' "
+            "(got %r)" % mode
+        )
+    return mode
 
 
 # ============================================================================
@@ -54,13 +81,28 @@ def get_ws_url(tab_id):
 
 
 def cdp_connect(tab_id, retries=MAX_RECONNECT):
-    """Connect to a tab via WebSocket with automatic reconnection."""
+    """Connect to a tab using the configured transport."""
+    if connection_mode() == "live":
+        for attempt in range(retries):
+            try:
+                return LiveTabConnection(tab_id)
+            except Exception:
+                if attempt < retries - 1:
+                    time.sleep(RECONNECT_DELAY)
+                else:
+                    return None
+        return None
+
     ws_url = get_ws_url(tab_id)
     if not ws_url:
         return None
     for attempt in range(retries):
         try:
-            ws = websocket.create_connection(ws_url, timeout=10, suppress_origin=True)
+            ws = websocket.create_connection(
+                ws_url,
+                timeout=10,
+                suppress_origin=True,
+            )
             return ws
         except Exception:
             if attempt < retries - 1:
@@ -76,6 +118,10 @@ def cdp_connect(tab_id, retries=MAX_RECONNECT):
 
 def cdp_send(ws, method, params=None, timeout=10):
     """Send CDP command and wait for response with timeout."""
+    command = getattr(ws, "command", None)
+    if callable(command):
+        return command(method, params, timeout=timeout)
+
     msg_id = int(time.time() * 1000) % 100000
     msg = {"id": msg_id, "method": method}
     if params:
@@ -102,21 +148,32 @@ def cdp_send_with_retry(ws, method, params=None, timeout=10, tab_id=None, retrie
             result = cdp_send(ws, method, params, timeout)
             if "error" not in result:
                 return result
-            # If error and we have retries left, reconnect
+            # If error and we have retries left, reconnect. Live target
+            # handles can reattach in place so callers keep a valid object.
             if attempt < retries - 1 and tab_id:
-                ws.close()
-                ws = cdp_connect(tab_id)
-                if not ws:
-                    return {"error": "reconnect failed"}
+                reconnect = getattr(ws, "reconnect", None)
+                if callable(reconnect):
+                    if not reconnect():
+                        return {"error": "reconnect failed"}
+                else:
+                    ws.close()
+                    ws = cdp_connect(tab_id)
+                    if not ws:
+                        return {"error": "reconnect failed"}
         except Exception as e:
             if attempt < retries - 1 and tab_id:
-                try:
-                    ws.close()
-                except Exception:
-                    pass
-                ws = cdp_connect(tab_id)
-                if not ws:
-                    return {"error": "reconnect failed"}
+                reconnect = getattr(ws, "reconnect", None)
+                if callable(reconnect):
+                    if not reconnect():
+                        return {"error": "reconnect failed"}
+                else:
+                    try:
+                        ws.close()
+                    except Exception:
+                        pass
+                    ws = cdp_connect(tab_id)
+                    if not ws:
+                        return {"error": "reconnect failed"}
             else:
                 return {"error": str(e)}
     return {"error": "max retries exceeded"}
@@ -137,6 +194,22 @@ def _unwrap(result, default=None):
 
 def list_tabs():
     """Return a list of open page tabs: [{id, title, url}, ...]."""
+    if connection_mode() == "live":
+        try:
+            targets = live_target_infos()
+        except Exception as exc:
+            return {"error": str(exc)}
+
+        return [
+            {
+                "id": target.get("targetId"),
+                "title": target.get("title", "")[:80],
+                "url": target.get("url", ""),
+            }
+            for target in targets
+            if target.get("type") == "page"
+        ]
+
     tabs = http_get("/json/list")
     if isinstance(tabs, dict) and "error" in tabs:
         return tabs
@@ -152,8 +225,8 @@ def list_tabs():
 
 
 def tab_url(tab_id):
-    """Return the current URL of a tab (from the CDP tab list)."""
-    tabs = http_get("/json/list")
+    """Return the current URL of a tab."""
+    tabs = list_tabs()
     if isinstance(tabs, dict) and "error" in tabs:
         return ""
     for tab in tabs:
