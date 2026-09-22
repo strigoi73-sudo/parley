@@ -59,6 +59,7 @@ from .adapters.js import make_focus_and_type_js
 from .relay import RelaySession
 from .relay.engine import (
     RESET_CHAT_COMMAND,
+    RELAY_RESPONSE_TIMEOUT_MS,
     TEST_A_REPLY_PREFIX,
     TEST_A_REPLY_SUFFIX,
     TEST_B_REPLY_PREFIX,
@@ -633,6 +634,7 @@ def cmd_relay(parts, input_fn=input, input_stream=None):
         initial_result = workflows.send_and_wait(
             tab_a["id"],
             initial_prompt,
+            wait_timeout_ms=RELAY_RESPONSE_TIMEOUT_MS,
             expected_reply_prefix=TEST_A_REPLY_PREFIX,
             expected_reply_suffix=TEST_A_REPLY_SUFFIX,
         )
@@ -655,6 +657,7 @@ def cmd_relay(parts, input_fn=input, input_stream=None):
             reset_result = workflows.send_and_wait(
                 tab_b["id"],
                 RESET_CHAT_COMMAND,
+                wait_timeout_ms=RELAY_RESPONSE_TIMEOUT_MS,
                 expected_reply_prefix=TEST_B_REPLY_PREFIX,
                 expected_reply_suffix=TEST_B_REPLY_SUFFIX,
             )
