@@ -500,6 +500,15 @@ Full message text may be optionally logged for development, but should be config
 
 ## 13. Testing Strategy
 
+### Verification policy
+
+Verification is **selective and milestone-based**.
+
+- Do not use GitHub Actions for this project.
+- Keep verification scripts and tests in the repository so they are reusable and survive interruptions.
+- Do not run a full verification cycle after every minor edit.
+- Run targeted checks when a risky subsystem changes, and run a broader local verification when a development phase is ready to be accepted or merged.
+- Prefer one deliberate verification at the end of a phase over repeated low-value checks during implementation.
 ### 13.1 Unit tests
 
 Tests should prove:
@@ -581,7 +590,7 @@ Acceptance:
 
 ### Phase 2 — Strict ChatGPT adapter
 
-Status: **Next major implementation step**
+Status: **Complete and locally verified (10 tests passed on 2026-09-22)**
 
 Deliverables:
 
@@ -596,6 +605,8 @@ Acceptance:
 - the page dump observed in the baseline experiment is impossible by design.
 
 ### Phase 3 — Reliable ChatGPT `send_and_wait()`
+
+Status: **Next implementation step**
 
 Deliverables:
 
@@ -710,6 +721,6 @@ If work resumes in a future session, start here:
 2. Treat `main` as the inherited baseline.
 3. Treat `test/upstream-bridge-live` as the preserved empirical baseline showing the original bridge defects.
 4. Do not assume `feature/live-browser-attach` should be merged wholesale; it is an experimental source of proven ideas.
-5. Continue with **Phase 2: Strict ChatGPT adapter** unless newer work in the repository supersedes this document.
+5. Continue with **Phase 3: Reliable ChatGPT `send_and_wait()`** unless newer work in the repository supersedes this document.
 6. Before changing architecture, verify whether a newer planning document or merged implementation has replaced this one.
 
