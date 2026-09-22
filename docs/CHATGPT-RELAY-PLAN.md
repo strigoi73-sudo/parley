@@ -571,7 +571,7 @@ Status: **Complete**
 
 ### Phase 1 — Browser session layer
 
-Status: **Production transport and response-turn replacement fix locally verified; pending live A → B → A smoke rerun**
+Status: **Production transport verified; second live smoke exposed transient user-turn count/identity churn; fix implemented, pending local re-verification and smoke rerun**
 
 Deliverables:
 
@@ -703,7 +703,7 @@ Do not prioritize:
 
 ## 16. Immediate Next Step
 
-Phase 1 production live-browser integration is implemented and the local transport milestone passed. The first live relay attempt proved A → B submission but exposed current ChatGPT replacing a transient `Thinking` assistant turn with the final answer under a new turn identity. The strict tracker now follows provably post-submission assistant-candidate replacements while the verified user-turn boundary remains unchanged. That fix has passed local verification. The remaining acceptance step is rerunning `scripts/smoke-live-relay.ps1`.
+Phase 1 production live-browser integration is implemented and the local transport milestone passed. The first live relay attempt proved A → B submission but exposed current ChatGPT replacing a transient `Thinking` assistant turn with the final answer under a new turn identity; that assistant-candidate replacement fix passed local verification. The second live attempt then showed ChatGPT transiently changing the rendered user-turn count from 3 to 2 while B was generating. The strict state now exposes the latest explicit user turn, and transaction tracking follows that submitted user turn by identity/text while tolerating non-increasing count/DOM-ID churn for the same normalized message. A genuinely different user message still fails closed. Re-run `scripts/verify-live-browser-production.ps1`, then rerun `scripts/smoke-live-relay.ps1`.
 
 ---
 
