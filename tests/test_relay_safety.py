@@ -1,3 +1,5 @@
+import threading
+import time
 import unittest
 from unittest import mock
 
@@ -258,6 +260,109 @@ class RelaySafetyTests(unittest.TestCase):
 
         self.assertFalse(result["ok"])
         self.assertEqual(result["error"], "relay_tab_unavailable")
+
+    def test_interactive_round_limit_waits_for_user_confirmation(self):
+        control = RelayControl(
+            round_limit=1,
+            confirm_round_limit=True,
+        )
+        holder = {}
+
+        def run():
+            holder["result"] = run_bidirectional_relay(
+                "A",
+                "B",
+                1,
+                read_response=lambda _: strict_turn("A1", "a1", 0),
+                send_and_wait=lambda tab, text: (
+                    completed_reply("B1", "b1", 0)
+                    if tab == "B"
+                    else completed_reply("A2", "a2", 1)
+                ),
+                control=control,
+            )
+
+        thread = threading.Thread(target=run)
+        thread.start()
+
+        deadline = time.monotonic() + 2
+        while (
+            not control.awaiting_round_extension
+            and time.monotonic() < deadline
+        ):
+            time.sleep(0.01)
+
+        self.assertTrue(control.awaiting_round_extension)
+        self.assertTrue(thread.is_alive())
+        self.assertNotIn("result", holder)
+
+        control.finish_at_round_limit()
+        thread.join(timeout=2)
+
+        self.assertFalse(thread.is_alive())
+        self.assertEqual(holder["result"]["status"], "complete")
+        self.assertEqual(holder["result"]["rounds_completed"], 1)
+
+    def test_interactive_round_limit_extension_resumes_same_relay(self):
+        control = RelayControl(
+            round_limit=1,
+            confirm_round_limit=True,
+        )
+        holder = {}
+        replies = [
+            completed_reply("B1", "b1", 0),
+            completed_reply("A2", "a2", 1),
+            completed_reply("B2", "b2", 1),
+            completed_reply("A3", "a3", 2),
+        ]
+
+        def send_and_wait(tab_id, text):
+            return replies.pop(0)
+
+        def run():
+            holder["result"] = run_bidirectional_relay(
+                "A",
+                "B",
+                1,
+                read_response=lambda _: strict_turn("A1", "a1", 0),
+                send_and_wait=send_and_wait,
+                control=control,
+            )
+
+        thread = threading.Thread(target=run)
+        thread.start()
+
+        deadline = time.monotonic() + 2
+        while (
+            not control.awaiting_round_extension
+            and time.monotonic() < deadline
+        ):
+            time.sleep(0.01)
+
+        self.assertTrue(control.awaiting_round_extension)
+        control.extend_round_limit(2)
+
+        deadline = time.monotonic() + 2
+        saw_second_prompt = False
+        while time.monotonic() < deadline:
+            if (
+                control.awaiting_round_extension
+                and control.round_limit == 2
+            ):
+                saw_second_prompt = True
+                break
+            time.sleep(0.01)
+
+        self.assertTrue(saw_second_prompt)
+        control.finish_at_round_limit()
+        thread.join(timeout=2)
+
+        self.assertFalse(thread.is_alive())
+        result = holder["result"]
+        self.assertEqual(result["status"], "complete")
+        self.assertEqual(result["rounds_requested"], 2)
+        self.assertEqual(result["rounds_completed"], 2)
+        self.assertEqual(len(result["transfers"]), 4)
 
     def test_round_limit_can_extend_while_relay_is_running(self):
         control = RelayControl(round_limit=1)
