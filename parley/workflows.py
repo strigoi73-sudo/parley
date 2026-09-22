@@ -83,7 +83,11 @@ def _message_count_js(tab_id):
 
 def read_response(tab_id):
     """Return the latest AI response object {text, source, hasStreaming, ...}."""
-    val = core.evaluate(tab_id, _response_js(tab_id))
+    val = core.evaluate(
+        tab_id,
+        _response_js(tab_id),
+        timeout=None,
+    )
     return val
 
 
@@ -94,7 +98,11 @@ def read_turn_state(tab_id):
         return {"ok": False, "error": "tab_url_unavailable"}
     if adapter.name != "chatgpt":
         return {"ok": False, "error": "chatgpt_adapter_required"}
-    return core.evaluate(tab_id, adapter.turn_state_js)
+    return core.evaluate(
+        tab_id,
+        adapter.turn_state_js,
+        timeout=None,
+    )
 
 
 def robust_send(ws, tab_id, text):
@@ -119,7 +127,7 @@ def robust_send(ws, tab_id, text):
         except Exception:
             pass
         time.sleep(7)  # Wait for reload + Angular re-init (conversation preserved)
-        ws = cdp_connect(tab_id)
+        ws = cdp_connect(tab_id, timeout=None)
         reloaded = True
 
     # Step 1: Focus input + select all existing content (so insertText replaces it)
@@ -296,12 +304,18 @@ def _runtime_value(result):
     return None
 
 
-def _chatgpt_eval(ws, expression):
+def _chatgpt_eval(ws, expression, should_stop=None):
     """Evaluate strict ChatGPT JS on an existing target connection."""
-    raw = cdp_send(ws, "Runtime.evaluate", {
-        "expression": expression,
-        "returnByValue": True,
-    })
+    raw = cdp_send(
+        ws,
+        "Runtime.evaluate",
+        {
+            "expression": expression,
+            "returnByValue": True,
+        },
+        timeout=None,
+        should_stop=should_stop,
+    )
     value = _runtime_value(raw)
     if not isinstance(value, dict):
         return {
@@ -312,9 +326,13 @@ def _chatgpt_eval(ws, expression):
     return value
 
 
-def _chatgpt_state(ws, adapter):
+def _chatgpt_state(ws, adapter, should_stop=None):
     """Read deterministic ChatGPT turn state on the existing connection."""
-    state = _chatgpt_eval(ws, adapter.turn_state_js)
+    state = _chatgpt_eval(
+        ws,
+        adapter.turn_state_js,
+        should_stop=should_stop,
+    )
     if not state.get("ok"):
         return state
     if "assistant_count" not in state or "user_count" not in state:
@@ -491,7 +509,9 @@ def _chatgpt_send_and_wait(
         return result
 
     try:
-        pre_state = _chatgpt_state(ws, adapter)
+        pre_state = _chatgpt_state(ws, adapter, should_stop=should_stop)
+        if pre_state.get("error") == "stopped":
+            return fail("chatgpt_wait_stopped", "snapshot")
         if not pre_state.get("ok"):
             return fail(
                 pre_state.get("error", "chatgpt_snapshot_failed"),
@@ -504,7 +524,13 @@ def _chatgpt_send_and_wait(
         )
         pre_user_count = int(pre_state.get("user_count", 0) or 0)
 
-        prepare = _chatgpt_eval(ws, adapter.prepare_composer_js)
+        prepare = _chatgpt_eval(
+            ws,
+            adapter.prepare_composer_js,
+            should_stop=should_stop,
+        )
+        if prepare.get("error") == "stopped":
+            return fail("chatgpt_wait_stopped", "prepare")
         if not prepare.get("ok"):
             return fail(
                 prepare.get("error", "chatgpt_composer_prepare_failed"),
@@ -512,7 +538,15 @@ def _chatgpt_send_and_wait(
                 detail=prepare,
             )
 
-        insert_result = cdp_send(ws, "Input.insertText", {"text": text})
+        insert_result = cdp_send(
+            ws,
+            "Input.insertText",
+            {"text": text},
+            timeout=None,
+            should_stop=should_stop,
+        )
+        if isinstance(insert_result, dict) and insert_result.get("error") == "stopped":
+            return fail("chatgpt_wait_stopped", "insert")
         if (
             not isinstance(insert_result, dict)
             or insert_result.get("error")
@@ -527,7 +561,13 @@ def _chatgpt_send_and_wait(
         # Give React enough time to enable the send button after insertText.
         time.sleep(0.2)
 
-        click = _chatgpt_eval(ws, adapter.click_send_js)
+        click = _chatgpt_eval(
+            ws,
+            adapter.click_send_js,
+            should_stop=should_stop,
+        )
+        if click.get("error") == "stopped":
+            return fail("chatgpt_wait_stopped", "submit")
         if not click.get("ok"):
             return fail(
                 click.get("error", "chatgpt_send_failed"),
@@ -546,7 +586,7 @@ def _chatgpt_send_and_wait(
             else min(deadline, time.monotonic() + 10.0)
         )
         while keep_waiting(submission_deadline):
-            state = _chatgpt_state(ws, adapter)
+            state = _chatgpt_state(ws, adapter, should_stop=should_stop)
             last_submission_state = state
             if not state.get("ok"):
                 return fail(
@@ -611,7 +651,7 @@ def _chatgpt_send_and_wait(
             candidate_seen = False
 
             while keep_waiting(deadline):
-                state = _chatgpt_state(ws, adapter)
+                state = _chatgpt_state(ws, adapter, should_stop=should_stop)
                 if not state.get("ok"):
                     return fail(
                         state.get("error", "chatgpt_state_failed"),
@@ -773,7 +813,7 @@ def _chatgpt_send_and_wait(
         # Now require a provably newer assistant turn.
         response_state = None
         while keep_waiting(deadline):
-            state = _chatgpt_state(ws, adapter)
+            state = _chatgpt_state(ws, adapter, should_stop=should_stop)
             if not state.get("ok"):
                 return fail(
                     state.get("error", "chatgpt_state_failed"),
@@ -816,7 +856,7 @@ def _chatgpt_send_and_wait(
         candidate_replacements = 0
 
         while keep_waiting(deadline):
-            state = _chatgpt_state(ws, adapter)
+            state = _chatgpt_state(ws, adapter, should_stop=should_stop)
             if not state.get("ok"):
                 return fail(
                     state.get("error", "chatgpt_state_failed"),
