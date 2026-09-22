@@ -6,6 +6,7 @@ from parley.adapters.chatgpt import ChatGPTAdapter
 from parley.adapters.chatgpt_strict import (
     CHATGPT_GET_MSG_COUNT_JS,
     CHATGPT_GET_RESPONSE_JS,
+    CHATGPT_GET_TURN_STATE_JS,
 )
 from parley.adapters.js import (
     UNIVERSAL_GET_MSG_COUNT,
@@ -49,6 +50,18 @@ class StrictChatGPTExtractorTests(unittest.TestCase):
             CHATGPT_GET_RESPONSE_JS,
         )
         self.assertIn("not_chatgpt_page", CHATGPT_GET_RESPONSE_JS)
+
+    def test_turn_state_exposes_explicit_latest_user_turn(self):
+        self.assertIn(
+            'article[data-turn="user"]',
+            CHATGPT_GET_TURN_STATE_JS,
+        )
+        self.assertIn(
+            '[data-message-author-role="user"]',
+            CHATGPT_GET_TURN_STATE_JS,
+        )
+        self.assertIn("user:user", CHATGPT_GET_TURN_STATE_JS)
+        self.assertNotIn("document.body.innerText", CHATGPT_GET_TURN_STATE_JS)
 
     def test_current_and_role_based_turn_structures_are_supported(self):
         for selector in (
