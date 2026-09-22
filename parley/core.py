@@ -184,6 +184,8 @@ def cdp_send_with_retry(
             )
             if "error" not in result:
                 return result
+            if result.get("error") == "stopped":
+                return result
             # If error and we have retries left, reconnect. Live target
             # handles can reattach in place so callers keep a valid object.
             if attempt < retries - 1 and tab_id:
@@ -193,7 +195,7 @@ def cdp_send_with_retry(
                         return {"error": "reconnect failed"}
                 else:
                     ws.close()
-                    ws = cdp_connect(tab_id)
+                    ws = cdp_connect(tab_id, timeout=timeout)
                     if not ws:
                         return {"error": "reconnect failed"}
         except Exception as e:
@@ -207,7 +209,7 @@ def cdp_send_with_retry(
                         ws.close()
                     except Exception:
                         pass
-                    ws = cdp_connect(tab_id)
+                    ws = cdp_connect(tab_id, timeout=timeout)
                     if not ws:
                         return {"error": "reconnect failed"}
             else:
@@ -278,7 +280,7 @@ def evaluate(tab_id, js, await_promise=False, timeout=10, ws=None):
     """
     own = ws is None
     if own:
-        ws = cdp_connect(tab_id)
+        ws = cdp_connect(tab_id, timeout=timeout)
         if not ws:
             return {"error": "cannot connect to tab"}
     try:
