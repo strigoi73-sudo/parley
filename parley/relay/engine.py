@@ -187,26 +187,6 @@ def run_bidirectional_relay(
 
     guard = DuplicateGuard()
 
-    if not isinstance(rounds, int) or isinstance(rounds, bool) or rounds < 1:
-        return {
-            "status": "error",
-            "state": ERROR,
-            "state_history": [IDLE, ERROR],
-            "tab_a": tab_a,
-            "tab_b": tab_b,
-            "rounds_requested": rounds,
-            "rounds_completed": 0,
-            "transfers": [],
-            "audit": [],
-            "error": "relay_rounds_must_be_positive_integer",
-            "stage": "prepare",
-        }
-
-    if getattr(control, "round_limit", None) is None:
-        setter = getattr(control, "set_round_limit", None)
-        if callable(setter):
-            setter(rounds)
-
     def current_round_limit():
         value = getattr(control, "round_limit", None)
         return rounds if value is None else value
@@ -390,6 +370,14 @@ def run_bidirectional_relay(
 
     if tab_a == tab_b:
         return fail("relay_tabs_must_be_distinct", "prepare")
+
+    if not isinstance(rounds, int) or isinstance(rounds, bool) or rounds < 1:
+        return fail("relay_rounds_must_be_positive_integer", "prepare")
+
+    if getattr(control, "round_limit", None) is None:
+        setter = getattr(control, "set_round_limit", None)
+        if callable(setter):
+            setter(rounds)
 
     for label, tab_id in (("A", tab_a), ("B", tab_b)):
         validation_failure = validate(label, tab_id, "prepare")
