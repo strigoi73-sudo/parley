@@ -18,4 +18,4 @@ if _ROOT not in sys.path:
 from parley.cli import main
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())
