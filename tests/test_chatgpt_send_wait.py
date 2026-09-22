@@ -552,6 +552,20 @@ class ChatGPTSendAndWaitTests(unittest.TestCase):
             },
             "hasStopButton": False,
         }
+        marker_not_terminal = {
+            **submitted,
+            "assistant_count": 2,
+            "assistant": {
+                "text": (
+                    "B REPLY: answer body\n\n"
+                    "B REPLY END\nextra streamed text"
+                ),
+                "turn_id": "assistant-final",
+                "turn_index": 1,
+                "hasStreaming": False,
+            },
+            "hasStopButton": False,
+        }
         final = {
             **submitted,
             "assistant_count": 2,
@@ -574,6 +588,7 @@ class ChatGPTSendAndWaitTests(unittest.TestCase):
                 thinking,
                 rollback,
                 partial_marked,
+                marker_not_terminal,
                 final,
                 final,
             ],
