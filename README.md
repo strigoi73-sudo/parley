@@ -175,6 +175,40 @@ You should see your open tabs with their IDs.
 
 ## Usage (CLI)
 
+### Two-ChatGPT relay
+
+List only ChatGPT tabs in a numbered, human-readable form:
+
+```powershell
+python .\parley.py chats
+```
+
+Start an interactive relay by choosing the tabs when prompted:
+
+```powershell
+python .\parley.py relay --rounds 3
+```
+
+Or supply either the displayed numbers or exact tab IDs:
+
+```powershell
+python .\parley.py relay 1 2 --rounds 3
+```
+
+While the relay runs, enter a command and press Enter:
+
+- `p` — pause at the next safe checkpoint
+- `r` — resume
+- `s` — show current state, round count, and transfer count
+- `q` — stop after any in-flight browser transaction finishes
+
+By default, relay summaries and audit records do not print full message text. Use
+`--include-text` only when you explicitly want transfer text retained, and
+`--json` when you want the full structured final result.
+
+The lower-level `bridge` command remains available for scripting.
+
+
 ```bash
 # List tabs and grab the ID you want
 python3 parley.py list

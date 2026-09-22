@@ -2,6 +2,7 @@
 
 from .control import RelayControl
 from .engine import run_bidirectional_relay
+from .session import RelaySession
 from .state import (
     COMPLETE,
     ERROR,
@@ -17,6 +18,7 @@ from .state import (
 __all__ = [
     "run_bidirectional_relay",
     "RelayControl",
+    "RelaySession",
     "IDLE",
     "PREPARE",
     "READ_A",
