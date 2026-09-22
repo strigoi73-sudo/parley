@@ -571,13 +571,13 @@ Status: **Complete**
 
 ### Phase 1 — Browser session layer
 
-Status: **Prototype proven; production design still needed**
+Status: **Production integration implemented; pending local transport verification and live relay smoke test**
 
 Deliverables:
 
 - one persistent browser-level live CDP connection;
 - tab enumeration;
-- stable A/B target sessions;
+- serialized flattened target sessions that remain stable for each browser transaction;
 - minimal reconnect behavior;
 - reduced Chrome approval prompts;
 - tests for target/session handling.
@@ -703,7 +703,7 @@ Do not prioritize:
 
 ## 16. Immediate Next Step
 
-Phase 6 is complete and locally verified. Complete the remaining production integration from Phase 1 so the CLI uses one persistent live Chrome debugging connection before the first real end-to-end relay smoke test.
+Phase 1 production live-browser integration is implemented on `feature/live-browser-production`. First run `scripts/verify-live-browser-production.ps1`. If that passes, run `scripts/smoke-live-relay.ps1` with two prepared ChatGPT tabs for the first real A ↔ B relay smoke test.
 
 ---
 
@@ -715,6 +715,6 @@ If work resumes in a future session, start here:
 2. Treat `main` as the inherited baseline.
 3. Treat `test/upstream-bridge-live` as the preserved empirical baseline showing the original bridge defects.
 4. Do not assume `feature/live-browser-attach` should be merged wholesale; it is an experimental source of proven ideas.
-5. Complete the remaining **Phase 1 production live-browser integration** before running the first real end-to-end relay smoke test. Then proceed to Phase 7.
+5. If the Phase 1 production transport has not yet been locally verified, run `scripts/verify-live-browser-production.ps1`. After it passes, run the first real end-to-end browser relay using `scripts/smoke-live-relay.ps1`. If that succeeds, proceed to Phase 7.
 6. Before changing architecture, verify whether a newer planning document or merged implementation has replaced this one.
 
