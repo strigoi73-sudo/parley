@@ -133,7 +133,11 @@ def cdp_send(ws, method, params=None, timeout=10):
         try:
             resp = json.loads(ws.recv())
             if resp.get("id") == msg_id:
-                return resp.get("result", resp.get("error", {}))
+                if "result" in resp:
+                    return resp["result"]
+                if "error" in resp:
+                    return {"error": resp["error"]}
+                return {"error": "malformed CDP response"}
         except websocket.WebSocketTimeoutException:
             break
         except Exception:
