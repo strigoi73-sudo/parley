@@ -137,6 +137,30 @@ class BidirectionalRelayTests(unittest.TestCase):
             ],
         )
 
+    def test_event_sink_receives_state_and_transfer_events(self):
+        events = []
+
+        result = run_bidirectional_relay(
+            "A",
+            "B",
+            1,
+            read_response=lambda _: strict_turn("A1", "a1", 0),
+            send_and_wait=lambda tab, text: (
+                completed_reply("B1", "b1", 0)
+                if tab == "B"
+                else completed_reply("A2", "a2", 1)
+            ),
+            event_sink=events.append,
+        )
+
+        self.assertEqual(result["status"], "complete")
+        names = [item.get("event") for item in events]
+        self.assertIn("state_changed", names)
+        self.assertEqual(
+            names.count("transfer_completed"),
+            2,
+        )
+
     def test_initial_incomplete_turn_fails_before_any_send(self):
         send = mock.Mock()
         result = run_bidirectional_relay(
