@@ -188,6 +188,7 @@ class WorkflowRoutingTests(unittest.TestCase):
         evaluate.assert_called_once_with(
             "tab-a",
             CHATGPT_GET_TURN_STATE_JS,
+            timeout=None,
         )
 
     def test_read_response_uses_strict_chatgpt_script(self):
@@ -210,7 +211,11 @@ class WorkflowRoutingTests(unittest.TestCase):
             result = workflows.read_response("tab-a")
 
         self.assertEqual(result, expected)
-        evaluate.assert_called_once_with("tab-a", CHATGPT_GET_RESPONSE_JS)
+        evaluate.assert_called_once_with(
+            "tab-a",
+            CHATGPT_GET_RESPONSE_JS,
+            timeout=None,
+        )
 
     def test_robust_send_snapshots_previous_text_with_strict_script(self):
         ws = mock.Mock()
