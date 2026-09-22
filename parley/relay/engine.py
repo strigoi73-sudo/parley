@@ -177,6 +177,7 @@ def run_bidirectional_relay(
     *,
     read_response,
     send_and_wait,
+    read_turn_state=None,
     validate_tab=None,
     control=None,
     include_text=False,
@@ -372,6 +373,17 @@ def run_bidirectional_relay(
     def external_reset_requested(label, tab_id, cached_turn):
         if cached_turn is None:
             return False
+
+        if callable(read_turn_state):
+            try:
+                state = read_turn_state(tab_id)
+            except Exception:
+                state = None
+            if isinstance(state, dict) and state.get("ok"):
+                user = state.get("user") or {}
+                if _is_reset_command(user.get("text")):
+                    return True
+
         try:
             raw = read_response(tab_id)
         except Exception:
