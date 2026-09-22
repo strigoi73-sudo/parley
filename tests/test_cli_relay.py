@@ -269,6 +269,7 @@ class RelayCLITests(unittest.TestCase):
         send_wait.assert_called_once_with(
             "TAB-A",
             "Discuss whether Pluto is a planet.",
+            wait_timeout_ms=cli.RELAY_RESPONSE_TIMEOUT_MS,
             expected_reply_prefix="A REPLY:",
             expected_reply_suffix="A REPLY END",
         )
@@ -330,6 +331,10 @@ class RelayCLITests(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertEqual(send_wait.call_count, 2)
         self.assertEqual(send_wait.call_args_list[1].args, ("TAB-B", "RESET CHAT"))
+        self.assertEqual(
+            send_wait.call_args_list[1].kwargs["wait_timeout_ms"],
+            cli.RELAY_RESPONSE_TIMEOUT_MS,
+        )
         self.assertEqual(
             send_wait.call_args_list[1].kwargs["expected_reply_prefix"],
             "B REPLY:",
