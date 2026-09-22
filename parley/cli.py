@@ -57,6 +57,7 @@ from . import core
 from . import workflows
 from .adapters.js import make_focus_and_type_js
 from .relay import RelaySession
+from .relay.engine import TEST_A_REPLY_PREFIX, TEST_A_REPLY_SUFFIX
 
 
 def _print(obj):
@@ -151,11 +152,20 @@ def _select_rounds(input_fn=input):
         print("Enter a whole number of rounds greater than zero.")
 
 
+def _select_initial_prompt(input_fn=input):
+    while True:
+        value = input_fn("Initial prompt: ").strip()
+        if value:
+            return value
+        print("Initial prompt cannot be blank.")
+
+
 def _parse_relay_args(parts):
     positional = []
     rounds = None
     include_text = False
     json_output = False
+    prompt_a = False
     i = 0
 
     while i < len(parts):
@@ -183,6 +193,11 @@ def _parse_relay_args(parts):
             i += 1
             continue
 
+        if part == "--prompt-a":
+            prompt_a = True
+            i += 1
+            continue
+
         if part.startswith("--"):
             raise ValueError("unknown relay option: %s" % part)
 
@@ -202,6 +217,7 @@ def _parse_relay_args(parts):
         "rounds": rounds,
         "include_text": include_text,
         "json_output": json_output,
+        "prompt_a": prompt_a,
     }
 
 
@@ -536,6 +552,36 @@ def cmd_relay(parts, input_fn=input, input_stream=None):
 
     if options["rounds"] is None:
         options["rounds"] = _select_rounds(input_fn=input_fn)
+
+    if options["prompt_a"]:
+        initial_prompt = _select_initial_prompt(input_fn=input_fn)
+        print()
+        print("Sending initial prompt to ChatGPT A...")
+        initial_result = workflows.send_and_wait(
+            tab_a["id"],
+            initial_prompt,
+            expected_reply_prefix=TEST_A_REPLY_PREFIX,
+            expected_reply_suffix=TEST_A_REPLY_SUFFIX,
+        )
+        if (
+            not isinstance(initial_result, dict)
+            or initial_result.get("error")
+            or not initial_result.get("response_complete")
+        ):
+            print("Initial prompt to ChatGPT A failed.")
+            if options["json_output"]:
+                _print(initial_result)
+            return 1
+
+        initial_text = (initial_result.get("response_text") or "").strip()
+        if initial_text == "RESET CHAT":
+            print("ChatGPT A returned RESET CHAT. Relay not started.")
+            return 1
+
+        print(
+            "ChatGPT A completed the starting reply (%d chars)."
+            % len(initial_text)
+        )
 
     print()
     print("ChatGPT A: %s" % (tab_a.get("title") or tab_a["id"]))
