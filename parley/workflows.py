@@ -87,6 +87,16 @@ def read_response(tab_id):
     return val
 
 
+def read_turn_state(tab_id):
+    """Return strict ChatGPT user/assistant turn state for relay checks."""
+    adapter = _adapter_for_tab(tab_id)
+    if adapter is None:
+        return {"ok": False, "error": "tab_url_unavailable"}
+    if adapter.name != "chatgpt":
+        return {"ok": False, "error": "chatgpt_adapter_required"}
+    return core.evaluate(tab_id, adapter.turn_state_js)
+
+
 def robust_send(ws, tab_id, text):
     """Shared send routine used by send() and send_and_wait().
 
@@ -1121,6 +1131,7 @@ def bridge(
         tab_to,
         rounds,
         read_response=read_response,
+        read_turn_state=read_turn_state,
         send_and_wait=send_and_wait,
         validate_tab=_validate_chatgpt_tab,
         control=control,
