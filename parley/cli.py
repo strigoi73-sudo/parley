@@ -379,7 +379,8 @@ def _run_interactive_relay(
                 if not round_limit_prompted:
                     print()
                     print(
-                        "Round limit reached at %d. Extend session? [y/N]"
+                        "Round limit reached at %d. "
+                        "Extend session? [y/N] (no timeout)"
                         % status.get("rounds_requested", 0)
                     )
                     round_limit_prompted = True
