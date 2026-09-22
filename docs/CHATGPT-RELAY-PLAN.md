@@ -622,7 +622,7 @@ Acceptance:
 
 ### Phase 4 — Bidirectional relay engine
 
-Status: **Implementation complete; pending local milestone verification**
+Status: **Complete and locally verified (milestone verification passed on 2026-09-22)**
 
 Deliverables:
 
@@ -711,6 +711,6 @@ If work resumes in a future session, start here:
 2. Treat `main` as the inherited baseline.
 3. Treat `test/upstream-bridge-live` as the preserved empirical baseline showing the original bridge defects.
 4. Do not assume `feature/live-browser-attach` should be merged wholesale; it is an experimental source of proven ideas.
-5. If Phase 4 has not yet been locally verified, run `scripts/verify-phase4.ps1`. After it passes, continue with **Phase 5: Safety and resilience** unless newer work in the repository supersedes this document.
+5. Continue with **Phase 5: Safety and resilience** unless newer work in the repository supersedes this document.
 6. Before changing architecture, verify whether a newer planning document or merged implementation has replaced this one.
 
