@@ -335,6 +335,8 @@ def run_bidirectional_relay(
             )
 
         reply, error = _completed_reply(raw)
+        if error == "chatgpt_wait_stopped":
+            return stopped("reset_propagation", round_number)
         if error or not _is_reset_command((reply or {}).get("text")):
             return fail(
                 "relay_reset_propagation_failed",
