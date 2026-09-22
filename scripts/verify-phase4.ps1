@@ -1,1 +1,21 @@
-$ErrorActionPreference = "Stop"\n\nSet-Location (Split-Path -Parent $PSScriptRoot)\n\nif (-not $env:VIRTUAL_ENV) {\n    . .\.venv\Scripts\Activate.ps1\n}\n\nWrite-Host "`n=== PARLEY PHASE 4 VERIFICATION ===" -ForegroundColor Cyan\n\npython -m compileall -q .\parley .\parley.py .\parley_mcp.py .\tests\nif ($LASTEXITCODE -ne 0) {\n    throw "Compilation failed."\n}\n\npython -m unittest discover -s .\tests -v\nif ($LASTEXITCODE -ne 0) {\n    throw "Tests failed."\n}\n\nWrite-Host "`nPhase 4 verification passed." -ForegroundColor Green\n
+$ErrorActionPreference = "Stop"
+
+Set-Location (Split-Path -Parent $PSScriptRoot)
+
+if (-not $env:VIRTUAL_ENV) {
+    . .\.venv\Scripts\Activate.ps1
+}
+
+Write-Host "`n=== PARLEY PHASE 4 VERIFICATION ===" -ForegroundColor Cyan
+
+python -m compileall -q .\parley .\parley.py .\parley_mcp.py .\tests
+if ($LASTEXITCODE -ne 0) {
+    throw "Compilation failed."
+}
+
+python -m unittest discover -s .\tests -v
+if ($LASTEXITCODE -ne 0) {
+    throw "Tests failed."
+}
+
+Write-Host "`nPhase 4 verification passed." -ForegroundColor Green
