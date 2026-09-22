@@ -425,6 +425,7 @@ def _chatgpt_send_and_wait(
     wait_timeout_ms=60000,
     silence_ms=1500,
     adapter=None,
+    expected_reply_prefix=None,
 ):
     """Strict ChatGPT send/wait transaction using one target connection.
 
@@ -534,6 +535,138 @@ def _chatgpt_send_and_wait(
             return fail(
                 "chatgpt_submission_not_verified",
                 "verify_submission",
+                pre_user_count=pre_user_count,
+            )
+
+        # Test-protocol mode uses an explicit final-reply marker as positive
+        # evidence that ChatGPT has reached the real assistant answer. This
+        # deliberately ignores transient "Thinking" surfaces and temporary
+        # React rollbacks to the pre-submission assistant turn.
+        if expected_reply_prefix:
+            expected_prefix = str(expected_reply_prefix).strip()
+            last_text = ""
+            last_change = time.monotonic()
+            candidate_replacements = 0
+            last_identity = None
+            candidate_seen = False
+
+            while time.monotonic() < deadline:
+                state = _chatgpt_state(ws, adapter)
+                if not state.get("ok"):
+                    return fail(
+                        state.get("error", "chatgpt_state_failed"),
+                        "track_marked_response",
+                        response_text=last_text,
+                        detail=state,
+                    )
+
+                if not _chatgpt_same_user_turn(submitted_state, state):
+                    submitted_user = submitted_state.get("user") or {}
+                    current_user = state.get("user") or {}
+                    return fail(
+                        "chatgpt_user_turn_changed_during_response",
+                        "track_marked_response",
+                        response_text=last_text,
+                        expected_user_turn_id=submitted_user.get("turn_id"),
+                        current_user_turn_id=current_user.get("turn_id"),
+                    )
+
+                current = state.get("assistant")
+                current_text = (
+                    (current or {}).get("text") or ""
+                ).strip()
+                is_reset = current_text == "RESET CHAT"
+                is_marked = current_text.startswith(expected_prefix)
+
+                eligible = bool(
+                    current
+                    and _chatgpt_has_new_assistant(pre_state, state)
+                    and (is_marked or is_reset)
+                )
+
+                if not eligible:
+                    # The latest rendered assistant may temporarily be
+                    # "Thinking", disappear, or roll back to the old answer.
+                    # None of those can satisfy a marked test response.
+                    candidate_seen = False
+                    last_identity = None
+                    last_text = ""
+                    last_change = time.monotonic()
+                    time.sleep(0.2)
+                    continue
+
+                current_count = int(
+                    state.get("assistant_count", 0) or 0
+                )
+                current_identity = (
+                    current.get("turn_id"),
+                    current.get("turn_index"),
+                    current_count,
+                )
+                now = time.monotonic()
+
+                if not candidate_seen:
+                    candidate_seen = True
+                    last_identity = current_identity
+                    last_text = current_text
+                    last_change = now
+                elif current_identity != last_identity:
+                    candidate_replacements += 1
+                    last_identity = current_identity
+                    last_text = current_text
+                    last_change = now
+                elif current_text != last_text:
+                    last_text = current_text
+                    last_change = now
+
+                streaming = bool(
+                    current.get("hasStreaming")
+                    or state.get("hasStopButton")
+                )
+                stable_ms = int((now - last_change) * 1000)
+
+                if (
+                    last_text
+                    and not streaming
+                    and stable_ms >= silence_ms
+                ):
+                    return {
+                        "pre_msg_count": pre_assistant_count,
+                        "pre_user_count": pre_user_count,
+                        "post_user_count": int(
+                            state.get("user_count", 0) or 0
+                        ),
+                        "submitted_user_turn_id": (
+                            (submitted_state.get("user") or {}).get("turn_id")
+                        ),
+                        "send_method": click.get(
+                            "method",
+                            "chatgpt-send-button",
+                        ),
+                        "sent_chars": len(text),
+                        "response_text": last_text,
+                        "response_complete": True,
+                        "response_turn_id": current.get("turn_id"),
+                        "response_turn_index": current.get("turn_index"),
+                        "response_source": "chatgpt-strict",
+                        "response_candidate_replacements": (
+                            candidate_replacements
+                        ),
+                        "expected_reply_prefix": expected_prefix,
+                        "response_duration_ms": int(
+                            (now - started) * 1000
+                        ),
+                    }
+
+                time.sleep(0.2)
+
+            return fail(
+                "chatgpt_marked_response_timeout",
+                "track_marked_response",
+                response_text=last_text,
+                expected_reply_prefix=expected_prefix,
+                response_candidate_replacements=candidate_replacements,
+                pre_msg_count=pre_assistant_count,
                 pre_user_count=pre_user_count,
             )
 
@@ -839,7 +972,13 @@ def _legacy_send_and_wait(
     return result
 
 
-def send_and_wait(tab_id, text, wait_timeout_ms=60000, silence_ms=1500):
+def send_and_wait(
+    tab_id,
+    text,
+    wait_timeout_ms=60000,
+    silence_ms=1500,
+    expected_reply_prefix=None,
+):
     """Send text and wait for a new completed response.
 
     ChatGPT uses the strict one-connection transaction path. Other adapters
@@ -859,6 +998,7 @@ def send_and_wait(tab_id, text, wait_timeout_ms=60000, silence_ms=1500):
             wait_timeout_ms=wait_timeout_ms,
             silence_ms=silence_ms,
             adapter=adapter,
+            expected_reply_prefix=expected_reply_prefix,
         )
 
     return _legacy_send_and_wait(
