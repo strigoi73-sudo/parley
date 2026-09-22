@@ -23,6 +23,19 @@ from .state import (
 )
 
 
+TEST_A_REPLY_PREFIX = "A REPLY:"
+TEST_B_REPLY_PREFIX = "B REPLY:"
+RESET_CHAT_COMMAND = "RESET CHAT"
+
+
+def _is_reset_command(text):
+    return str(text or "").strip() == RESET_CHAT_COMMAND
+
+
+def _has_reply_prefix(text, prefix):
+    return str(text or "").lstrip().startswith(prefix)
+
+
 def _initial_turn(value):
     """Normalize the starting completed assistant turn from ChatGPT A."""
     if not isinstance(value, dict):
@@ -239,6 +252,22 @@ def run_bidirectional_relay(
         )
         return result
 
+    def reset_requested(label, stage, round_number=None):
+        transition(STOPPED)
+        result["status"] = "stopped"
+        result["stage"] = stage
+        result["reset_requested"] = True
+        result["reset_by"] = label
+        if round_number is not None:
+            result["round"] = round_number
+        record(
+            "relay_reset_requested",
+            chat=label,
+            stage=stage,
+            round=round_number,
+        )
+        return result
+
     def checkpoint(stage, round_number=None):
         resume_state = result["state"]
         was_paused = control.state == CONTROL_PAUSED
@@ -377,6 +406,20 @@ def run_bidirectional_relay(
         text_hash=turn_text_hash(current_a),
     )
 
+    # A marked starting response opts this relay run into the conversation-local
+    # Parley test protocol. Ordinary/production ChatGPT relays remain unchanged.
+    test_protocol = _has_reply_prefix(
+        current_a["text"],
+        TEST_A_REPLY_PREFIX,
+    )
+    result["test_protocol"] = test_protocol
+    if test_protocol:
+        record(
+            "test_protocol_activated",
+            a_prefix=TEST_A_REPLY_PREFIX,
+            b_prefix=TEST_B_REPLY_PREFIX,
+        )
+
     current_b = None
 
     for round_number in range(1, rounds + 1):
@@ -423,7 +466,14 @@ def run_bidirectional_relay(
         )
 
         try:
-            b_raw = send_and_wait(tab_b, current_a["text"])
+            if test_protocol:
+                b_raw = send_and_wait(
+                    tab_b,
+                    current_a["text"],
+                    expected_reply_prefix=TEST_B_REPLY_PREFIX,
+                )
+            else:
+                b_raw = send_and_wait(tab_b, current_a["text"])
         except Exception as exc:
             return fail(
                 "relay_transfer_exception",
@@ -440,6 +490,27 @@ def run_bidirectional_relay(
                 round_number=round_number,
                 detail=b_raw,
             )
+
+        if test_protocol:
+            if _is_reset_command(current_b["text"]):
+                return reset_requested(
+                    "B",
+                    "a_to_b",
+                    round_number,
+                )
+            if not _has_reply_prefix(
+                current_b["text"],
+                TEST_B_REPLY_PREFIX,
+            ):
+                return fail(
+                    "relay_test_reply_marker_missing",
+                    "a_to_b",
+                    round_number=round_number,
+                    detail={
+                        "expected_prefix": TEST_B_REPLY_PREFIX,
+                        "response_text": current_b["text"],
+                    },
+                )
 
         transfer = _transfer_record(
             round_number,
@@ -496,7 +567,14 @@ def run_bidirectional_relay(
         )
 
         try:
-            a_raw = send_and_wait(tab_a, current_b["text"])
+            if test_protocol:
+                a_raw = send_and_wait(
+                    tab_a,
+                    current_b["text"],
+                    expected_reply_prefix=TEST_A_REPLY_PREFIX,
+                )
+            else:
+                a_raw = send_and_wait(tab_a, current_b["text"])
         except Exception as exc:
             return fail(
                 "relay_transfer_exception",
@@ -513,6 +591,27 @@ def run_bidirectional_relay(
                 round_number=round_number,
                 detail=a_raw,
             )
+
+        if test_protocol:
+            if _is_reset_command(next_a["text"]):
+                return reset_requested(
+                    "A",
+                    "b_to_a",
+                    round_number,
+                )
+            if not _has_reply_prefix(
+                next_a["text"],
+                TEST_A_REPLY_PREFIX,
+            ):
+                return fail(
+                    "relay_test_reply_marker_missing",
+                    "b_to_a",
+                    round_number=round_number,
+                    detail={
+                        "expected_prefix": TEST_A_REPLY_PREFIX,
+                        "response_text": next_a["text"],
+                    },
+                )
 
         transfer = _transfer_record(
             round_number,
