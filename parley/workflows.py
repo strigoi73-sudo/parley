@@ -545,7 +545,11 @@ def _chatgpt_send_and_wait(
         # React rollbacks to the pre-submission assistant turn.
         if expected_reply_prefix:
             expected_prefix = str(expected_reply_prefix).strip()
-            expected_suffix = str(expected_reply_suffix or "").strip()
+            expected_suffix = (
+                str(expected_reply_suffix).strip()
+                if expected_reply_suffix
+                else None
+            )
             last_text = ""
             last_change = time.monotonic()
             candidate_replacements = 0
