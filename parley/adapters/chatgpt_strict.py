@@ -24,7 +24,6 @@ function collectTurns(roleName) {
   for (const role of document.querySelectorAll(roleSelector)) {
     const candidate =
       role.closest(articleSelector) ||
-      role.closest('article') ||
       role;
     if (!seen.has(candidate)) {
       nodes.push(candidate);
@@ -124,7 +123,6 @@ function collectTurns(roleName) {
   for (const role of document.querySelectorAll(roleSelector)) {
     const candidate =
       role.closest(articleSelector) ||
-      role.closest('article') ||
       role;
     if (!seen.has(candidate)) {
       nodes.push(candidate);
@@ -182,7 +180,6 @@ function collectTurns(roleName) {
   for (const role of document.querySelectorAll(roleSelector)) {
     const candidate =
       role.closest(articleSelector) ||
-      role.closest('article') ||
       role;
     if (!seen.has(candidate)) {
       nodes.push(candidate);
