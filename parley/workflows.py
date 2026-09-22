@@ -394,14 +394,20 @@ def _chatgpt_same_user_turn(expected_state, current_state):
     if isinstance(expected, dict) and isinstance(current, dict):
         expected_id = expected.get("turn_id")
         current_id = current.get("turn_id")
-
-        if expected_id and current_id:
-            return expected_id == current_id
-
         expected_text = _normalize_chatgpt_text(expected.get("text"))
         current_text = _normalize_chatgpt_text(current.get("text"))
-        if expected_text and current_text:
-            return expected_text == current_text
+        expected_count = int(expected_state.get("user_count", 0) or 0)
+        current_count = int(current_state.get("user_count", 0) or 0)
+
+        if expected_id and current_id and expected_id == current_id:
+            return True
+
+        if expected_text and current_text and expected_text == current_text:
+            # React may replace the same rendered user turn under a different
+            # DOM identity while transient duplicate nodes disappear. A
+            # non-increasing count plus identical normalized text is safe to
+            # treat as the same submitted turn.
+            return current_count <= expected_count
 
         return False
 
