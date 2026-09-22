@@ -297,6 +297,13 @@ class RelaySafetyTests(unittest.TestCase):
             self.assertTrue(thread.is_alive())
             self.assertNotIn("result", holder)
 
+            # Human decision waits are indefinite: idling must not
+            # auto-finish or time out the relay.
+            time.sleep(0.25)
+            self.assertTrue(control.awaiting_round_extension)
+            self.assertTrue(thread.is_alive())
+            self.assertNotIn("result", holder)
+
             control.finish_at_round_limit()
             thread.join(timeout=2)
 
