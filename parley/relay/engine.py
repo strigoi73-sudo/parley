@@ -691,6 +691,8 @@ def run_bidirectional_relay(
 
         current_b, error = _completed_reply(b_raw)
         if error:
+            if error == "chatgpt_wait_stopped":
+                return stopped("a_to_b", round_number)
             return fail(
                 error,
                 "a_to_b",
@@ -811,6 +813,8 @@ def run_bidirectional_relay(
 
         next_a, error = _completed_reply(a_raw)
         if error:
+            if error == "chatgpt_wait_stopped":
+                return stopped("b_to_a", round_number)
             return fail(
                 error,
                 "b_to_a",
