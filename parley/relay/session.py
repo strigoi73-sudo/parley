@@ -16,12 +16,14 @@ class RelaySession:
         rounds,
         *,
         include_text=False,
+        initial_context=None,
     ):
         self.bridge = bridge
         self.tab_a = tab_a
         self.tab_b = tab_b
         self.rounds = rounds
         self.include_text = include_text
+        self.initial_context = initial_context
         self.control = RelayControl(
             round_limit=rounds,
             confirm_round_limit=True,
@@ -59,6 +61,7 @@ class RelaySession:
                 control=self.control,
                 include_text=self.include_text,
                 event_sink=self._on_event,
+                initial_context=self.initial_context,
             )
             with self._lock:
                 self._result = result
