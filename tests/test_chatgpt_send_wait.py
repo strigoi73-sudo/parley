@@ -606,6 +606,82 @@ class ChatGPTSendAndWaitTests(unittest.TestCase):
         self.assertEqual(result["expected_reply_prefix"], "B REPLY:")
         self.assertEqual(result["expected_reply_suffix"], "B REPLY END")
 
+    def test_prefix_only_marked_reply_ignores_thinking_and_rollback(self):
+        old = {
+            "ok": True,
+            "source": "chatgpt-strict",
+            "assistant_count": 1,
+            "user_count": 1,
+            "assistant": {
+                "text": "A REPLY: old answer",
+                "turn_id": "assistant-old",
+                "turn_index": 0,
+                "hasStreaming": False,
+            },
+            "user": {
+                "text": "old prompt",
+                "turn_id": "user-old",
+                "turn_index": 0,
+            },
+            "hasStopButton": False,
+        }
+        submitted = {
+            **old,
+            "user_count": 2,
+            "user": {
+                "text": "hello",
+                "turn_id": "user-submitted",
+                "turn_index": 1,
+            },
+        }
+        thinking = {
+            **submitted,
+            "assistant_count": 2,
+            "assistant": {
+                "text": "Thinking",
+                "turn_id": "assistant-thinking",
+                "turn_index": 1,
+                "hasStreaming": True,
+            },
+            "hasStopButton": True,
+        }
+        rollback = {
+            **submitted,
+            "assistant_count": 1,
+            "assistant": old["assistant"],
+            "hasStopButton": False,
+        }
+        final = {
+            **submitted,
+            "assistant_count": 2,
+            "assistant": {
+                "text": "B REPLY: final answer",
+                "turn_id": "assistant-final",
+                "turn_index": 1,
+                "hasStreaming": False,
+            },
+            "hasStopButton": False,
+        }
+
+        result, _, _, _ = self.run_transaction(
+            [
+                old,
+                submitted,
+                thinking,
+                rollback,
+                final,
+                final,
+            ],
+            silence_ms=200,
+            expected_reply_prefix="B REPLY:",
+        )
+
+        self.assertTrue(result["response_complete"])
+        self.assertEqual(result["response_text"], "B REPLY: final answer")
+        self.assertEqual(result["response_turn_id"], "assistant-final")
+        self.assertEqual(result["expected_reply_prefix"], "B REPLY:")
+        self.assertIsNone(result["expected_reply_suffix"])
+
     def test_dispatcher_routes_chatgpt_to_strict_transaction(self):
         expected = {
             "response_text": "reply",
