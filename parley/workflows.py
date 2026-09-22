@@ -379,7 +379,7 @@ def bridge(tab_from, tab_to, rounds=3):
 
         try:
             initial = cdp_send(ws_from, "Runtime.evaluate", {
-                "expression": _response_js(tab_id),
+                "expression": _response_js(tab_from),
                 "returnByValue": True,
             })
 
