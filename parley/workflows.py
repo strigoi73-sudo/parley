@@ -32,9 +32,30 @@ from .adapters.js import (
 )
 
 
+def _adapter_for_tab(tab_id):
+    """Return the registered site adapter for the tab's current URL."""
+    return detect(core.tab_url(tab_id))
+
+
+def _response_js(tab_id):
+    """Return the site-specific response extractor for this tab.
+
+    ChatGPT supplies a fail-closed extractor. Other adapters currently fall
+    back to the inherited universal detector.
+    """
+    adapter = _adapter_for_tab(tab_id)
+    return getattr(adapter, "response_js", UNIVERSAL_GET_RESPONSE)
+
+
+def _message_count_js(tab_id):
+    """Return the site-specific assistant-message counter for this tab."""
+    adapter = _adapter_for_tab(tab_id)
+    return getattr(adapter, "message_count_js", UNIVERSAL_GET_MSG_COUNT)
+
+
 def read_response(tab_id):
     """Return the latest AI response object {text, source, hasStreaming, ...}."""
-    val = core.evaluate(tab_id, UNIVERSAL_GET_RESPONSE)
+    val = core.evaluate(tab_id, _response_js(tab_id))
     return val
 
 
@@ -74,7 +95,7 @@ def robust_send(ws, tab_id, text):
     # tell when a genuinely NEW response has arrived (avoids returning stale text).
     prev_text = ""
     prev_result = cdp_send_with_retry(ws, "Runtime.evaluate", {
-        "expression": UNIVERSAL_GET_RESPONSE,
+        "expression": _response_js(tab_id),
         "returnByValue": True,
     }, tab_id=tab_id)
     if "result" in prev_result:
@@ -145,7 +166,7 @@ def wait_stream(tab_id, timeout_ms=60000, silence_ms=1500):
         return {"error": "cannot connect to tab"}
     try:
         count_result = cdp_send(ws, "Runtime.evaluate", {
-            "expression": UNIVERSAL_GET_MSG_COUNT,
+            "expression": _message_count_js(tab_id),
             "returnByValue": True,
         })
         initial_count = 0
@@ -153,7 +174,7 @@ def wait_stream(tab_id, timeout_ms=60000, silence_ms=1500):
             initial_count = count_result["result"]["value"].get("count", 0)
 
         initial = cdp_send(ws, "Runtime.evaluate", {
-            "expression": UNIVERSAL_GET_RESPONSE,
+            "expression": _response_js(tab_id),
             "returnByValue": True,
         })
         initial_text = ""
@@ -207,7 +228,7 @@ def poll(tab_id, interval_ms=2000, max_iters=60):
         last_hash = ""
         for _ in range(max_iters):
             result = cdp_send(ws, "Runtime.evaluate", {
-                "expression": UNIVERSAL_GET_RESPONSE,
+                "expression": _response_js(tab_id),
                 "returnByValue": True,
             })
             if "result" in result and "value" in result["result"]:
@@ -238,7 +259,7 @@ def send_and_wait(tab_id, text, wait_timeout_ms=60000, silence_ms=1500):
     pre_count = 0
     try:
         count_result = cdp_send(ws_pre, "Runtime.evaluate", {
-            "expression": UNIVERSAL_GET_MSG_COUNT,
+            "expression": _message_count_js(tab_id),
             "returnByValue": True,
         })
         if "result" in count_result and "value" in count_result["result"]:
@@ -279,7 +300,7 @@ def send_and_wait(tab_id, text, wait_timeout_ms=60000, silence_ms=1500):
         found_new = False
         for _ in range(max_wait * 2):  # Check every 500ms
             count_result = cdp_send(ws_wait, "Runtime.evaluate", {
-                "expression": UNIVERSAL_GET_MSG_COUNT,
+                "expression": _message_count_js(tab_id),
                 "returnByValue": True,
             })
             current_count = 0
@@ -291,7 +312,7 @@ def send_and_wait(tab_id, text, wait_timeout_ms=60000, silence_ms=1500):
                 break
 
             check = cdp_send(ws_wait, "Runtime.evaluate", {
-                "expression": UNIVERSAL_GET_RESPONSE,
+                "expression": _response_js(tab_id),
                 "returnByValue": True,
             })
             if "result" in check and "value" in check["result"]:
@@ -324,7 +345,7 @@ def send_and_wait(tab_id, text, wait_timeout_ms=60000, silence_ms=1500):
                 result["note"] = "empty response (target may be rate-limited or not logged in)"
         else:
             final = cdp_send(ws_wait, "Runtime.evaluate", {
-                "expression": UNIVERSAL_GET_RESPONSE,
+                "expression": _response_js(tab_id),
                 "returnByValue": True,
             })
             final_text = ""
@@ -358,7 +379,7 @@ def bridge(tab_from, tab_to, rounds=3):
 
         try:
             initial = cdp_send(ws_from, "Runtime.evaluate", {
-                "expression": UNIVERSAL_GET_RESPONSE,
+                "expression": _response_js(tab_id),
                 "returnByValue": True,
             })
 
