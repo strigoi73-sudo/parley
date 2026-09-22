@@ -187,13 +187,22 @@ def run_bidirectional_relay(
 
     guard = DuplicateGuard()
 
+    if getattr(control, "round_limit", None) is None:
+        setter = getattr(control, "set_round_limit", None)
+        if callable(setter):
+            setter(rounds)
+
+    def current_round_limit():
+        value = getattr(control, "round_limit", None)
+        return rounds if value is None else value
+
     result = {
         "status": "running",
         "state": IDLE,
         "state_history": [IDLE],
         "tab_a": tab_a,
         "tab_b": tab_b,
-        "rounds_requested": rounds,
+        "rounds_requested": current_round_limit(),
         "rounds_completed": 0,
         "transfers": [],
         "audit": [],
@@ -422,7 +431,21 @@ def run_bidirectional_relay(
 
     current_b = None
 
-    for round_number in range(1, rounds + 1):
+    round_number = 1
+    observed_round_limit = current_round_limit()
+    while round_number <= current_round_limit():
+        active_round_limit = current_round_limit()
+        if active_round_limit != observed_round_limit:
+            if active_round_limit > observed_round_limit:
+                record(
+                    "relay_round_limit_extended",
+                    previous_round_limit=observed_round_limit,
+                    round_limit=active_round_limit,
+                    round=round_number,
+                )
+            observed_round_limit = active_round_limit
+        result["rounds_requested"] = active_round_limit
+
         transition(TRANSFER_A_TO_B)
 
         checkpoint_result = checkpoint(
@@ -627,7 +650,9 @@ def run_bidirectional_relay(
 
         current_a = next_a
         result["rounds_completed"] = round_number
+        round_number += 1
 
+    result["rounds_requested"] = current_round_limit()
     transition(COMPLETE)
     result["status"] = "complete"
     result["latest_a"] = current_a
