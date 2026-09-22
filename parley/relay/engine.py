@@ -28,6 +28,7 @@ TEST_A_REPLY_SUFFIX = "A REPLY END"
 TEST_B_REPLY_PREFIX = "B REPLY:"
 TEST_B_REPLY_SUFFIX = "B REPLY END"
 RESET_CHAT_COMMAND = "RESET CHAT"
+RELAY_RESPONSE_TIMEOUT_MS = 300000
 
 
 def _is_reset_command(text):
@@ -316,6 +317,7 @@ def run_bidirectional_relay(
             raw = send_and_wait(
                 counterpart_tab,
                 RESET_CHAT_COMMAND,
+                wait_timeout_ms=RELAY_RESPONSE_TIMEOUT_MS,
                 expected_reply_prefix=expected_prefix,
                 expected_reply_suffix=expected_suffix,
             )
@@ -671,6 +673,7 @@ def run_bidirectional_relay(
                 b_raw = send_and_wait(
                     tab_b,
                     delivery_text,
+                    wait_timeout_ms=RELAY_RESPONSE_TIMEOUT_MS,
                     expected_reply_prefix=TEST_B_REPLY_PREFIX,
                     expected_reply_suffix=TEST_B_REPLY_SUFFIX,
                 )
@@ -789,6 +792,7 @@ def run_bidirectional_relay(
                 a_raw = send_and_wait(
                     tab_a,
                     current_b["text"],
+                    wait_timeout_ms=RELAY_RESPONSE_TIMEOUT_MS,
                     expected_reply_prefix=TEST_A_REPLY_PREFIX,
                     expected_reply_suffix=TEST_A_REPLY_SUFFIX,
                 )
