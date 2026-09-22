@@ -571,7 +571,7 @@ Status: **Complete**
 
 ### Phase 1 — Browser session layer
 
-Status: **Production integration implemented; pending local transport verification and live relay smoke test**
+Status: **Production transport locally verified; pending live A → B → A browser smoke test**
 
 Deliverables:
 
@@ -703,7 +703,7 @@ Do not prioritize:
 
 ## 16. Immediate Next Step
 
-Phase 1 production live-browser integration is implemented on `feature/live-browser-production`. First run `scripts/verify-live-browser-production.ps1`. If that passes, run `scripts/smoke-live-relay.ps1` with two prepared ChatGPT tabs for the first real A ↔ B relay smoke test.
+Phase 1 production live-browser integration is implemented and the local transport milestone has passed. The remaining acceptance step is `scripts/smoke-live-relay.ps1` with two prepared ChatGPT tabs for one real A ↔ B round.
 
 ---
 
@@ -715,6 +715,6 @@ If work resumes in a future session, start here:
 2. Treat `main` as the inherited baseline.
 3. Treat `test/upstream-bridge-live` as the preserved empirical baseline showing the original bridge defects.
 4. Do not assume `feature/live-browser-attach` should be merged wholesale; it is an experimental source of proven ideas.
-5. If the Phase 1 production transport has not yet been locally verified, run `scripts/verify-live-browser-production.ps1`. After it passes, run the first real end-to-end browser relay using `scripts/smoke-live-relay.ps1`. If that succeeds, proceed to Phase 7.
+5. Production live-browser transport verification has passed. Run the first real end-to-end browser relay using `scripts/smoke-live-relay.ps1`. If that succeeds, Phase 1 is complete and the project can proceed to Phase 7.
 6. Before changing architecture, verify whether a newer planning document or merged implementation has replaced this one.
 
