@@ -1062,6 +1062,7 @@ def bridge(
     control=None,
     include_text=False,
     event_sink=None,
+    initial_context=None,
 ):
     """Run a guarded bidirectional ChatGPT relay.
 
@@ -1080,4 +1081,5 @@ def bridge(
         control=control,
         include_text=include_text,
         event_sink=event_sink,
+        initial_context=initial_context,
     )
