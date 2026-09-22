@@ -498,6 +498,56 @@ class BidirectionalRelayTests(unittest.TestCase):
         self.assertEqual(len(result["transfers"]), 1)
         self.assertEqual(len(calls), 3)
 
+    def test_external_a_reset_is_detected_at_safe_checkpoint(self):
+        a_reads = 0
+        latest_b = strict_turn(
+            "B REPLY: response from B\n\nB REPLY END",
+            "b1",
+            0,
+        )
+        calls = []
+
+        def read_response(tab_id):
+            nonlocal a_reads
+            if tab_id == "A":
+                a_reads += 1
+                if a_reads >= 3:
+                    return strict_turn("RESET CHAT", "a-reset", 2)
+                return strict_turn(
+                    "A REPLY: starting answer\n\nA REPLY END",
+                    "a1",
+                    0,
+                )
+            return latest_b
+
+        def send_and_wait(tab_id, text, **kwargs):
+            calls.append((tab_id, text, kwargs))
+            if len(calls) == 1:
+                return completed_reply(
+                    "B REPLY: response from B\n\nB REPLY END",
+                    "b1",
+                    0,
+                )
+            self.assertEqual(tab_id, "B")
+            self.assertEqual(text, "RESET CHAT")
+            return completed_reply("RESET CHAT", "b-reset", 1)
+
+        result = run_bidirectional_relay(
+            "A",
+            "B",
+            1,
+            read_response=read_response,
+            send_and_wait=send_and_wait,
+        )
+
+        self.assertEqual(result["status"], "stopped")
+        self.assertEqual(result["reset_by"], "A")
+        self.assertEqual(result["reset_acknowledged_by"], "B")
+        self.assertTrue(result["reset_propagated"])
+        self.assertEqual(result["restart_point"], "A")
+        self.assertEqual(len(result["transfers"]), 1)
+        self.assertEqual(len(calls), 2)
+
     def test_reset_propagation_fails_closed_without_exact_ack(self):
         calls = []
 
