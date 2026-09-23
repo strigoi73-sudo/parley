@@ -77,7 +77,8 @@ $ python3 parley.py cookies <gemini_tab> gemini.google.com
 - **Reliable streaming detection** — a `MutationObserver` returns the response only once it stops changing, so you never grab a partial answer.
 - **AI-to-AI bridging** — relay a conversation between two tabs (e.g. ChatGPT ↔ Gemini) for N rounds.
 - **Self-healing** — auto-reconnects dropped CDP sockets and recovers Gemini's "stuck send button" state via a targeted reload that preserves history.
-- **Three ways to use it** — a plain CLI, an [MCP](https://modelcontextprotocol.io) server (Claude Desktop / Cursor / opencode / any MCP client), and a native opencode plugin.
+- **Desktop relay console** — a comfortable dark UI for selecting ChatGPT A/B, verifying Parley protocol initialization, entering multiline prompts, watching the transcript, and controlling rounds.
+- **Three ways to use it** — a desktop GUI, plain CLI, an [MCP](https://modelcontextprotocol.io) server (Claude Desktop / Cursor / opencode / any MCP client), and a native opencode plugin.
 - **Zero heavy deps** — one small dependency (`websocket-client`). No Playwright, no Puppeteer, no headless Chrome download.
 
 ### Generic Automation (any website)
@@ -124,6 +125,7 @@ Parley is organized in three layers so the generic engine stays independent of a
 
 ```
 parley/
+├── gui.py             Tkinter desktop console over the relay/session APIs.
 ├── core.py            Core CDP engine — connection, DOM, JS eval, input,
 │                      navigation, wait_for, cookies. Knows nothing about AI sites.
 ├── adapters/          Per-site knowledge (selectors, quirks)
@@ -174,6 +176,31 @@ python .\parley.py chats
 
 The `chats` and `relay` commands use live mode by default and should show
 your existing signed-in ChatGPT tabs.
+
+### 3. Launch the desktop console
+
+On Windows, the simplest launcher is:
+
+```powershell
+.\scripts\start-parley-ui.ps1
+```
+
+or directly:
+
+```powershell
+python .\parley.py gui
+```
+
+The desktop console uses the same live relay engine as the CLI. Select Chat A
+and Chat B, optionally give them friendly display names, click **Initialize Both**
+to send and verify the exact A/B activation commands, enter a multiline session
+prompt, choose the round limit, and click **Start Session**.
+
+The live transcript displays completed replies without the transport markers,
+while the activity pane and session panel expose relay state, direction, round
+count, elapsed time, pause/resume/stop controls, round extension, and coordinated
+reset at a round boundary. Live relay operations do not have automatic failure
+timeouts; use **Stop** when you want to end an operation that appears stuck.
 
 ### Classic compatibility mode
 
