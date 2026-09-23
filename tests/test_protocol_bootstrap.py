@@ -365,13 +365,28 @@ class ProtocolBootstrapTests(unittest.TestCase):
         self.assertEqual(stabilize.call_count, 2)
         self.assertEqual(ack_send.call_count, 2)
         self.assertEqual(activation_send.call_count, 2)
-        for call in ack_send.call_args_list:
+        expected_acks = [
+            "PARLEY PROTOCOL A RECEIVED",
+            "PARLEY PROTOCOL B RECEIVED",
+        ]
+        for call, expected_ack in zip(
+            ack_send.call_args_list,
+            expected_acks,
+        ):
             self.assertFalse(
                 call.kwargs["require_user_text_match"]
             )
             self.assertEqual(
                 call.kwargs["submission_timeout_ms"],
                 60000,
+            )
+            self.assertEqual(
+                call.kwargs["expected_reply_prefix"],
+                expected_ack,
+            )
+            self.assertEqual(
+                call.kwargs["expected_reply_suffix"],
+                expected_ack,
             )
             self.assertTrue(
                 call.kwargs["pre_state_override"]["ok"]

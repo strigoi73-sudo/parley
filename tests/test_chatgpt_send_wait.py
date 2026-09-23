@@ -247,6 +247,76 @@ class ChatGPTSendAndWaitTests(unittest.TestCase):
             1000,
         )
 
+    def test_exact_ack_marker_ignores_thinking_surface(self):
+        pre = {
+            "ok": True,
+            "source": "chatgpt-strict",
+            "assistant_count": 0,
+            "user_count": 0,
+            "assistant": None,
+            "user": None,
+            "hasStopButton": False,
+        }
+        submitted = {
+            **pre,
+            "user_count": 1,
+            "user": {
+                "text": "protocol receipt request",
+                "turn_id": "user-file-turn",
+                "turn_index": 0,
+            },
+        }
+        thinking = {
+            **submitted,
+            "assistant_count": 1,
+            "assistant": {
+                "text": "Thinking",
+                "turn_id": "assistant-thinking",
+                "turn_index": 0,
+                "hasStreaming": True,
+            },
+            "hasStopButton": True,
+        }
+        final = {
+            **submitted,
+            "assistant_count": 1,
+            "assistant": {
+                "text": "PARLEY PROTOCOL A RECEIVED",
+                "turn_id": "assistant-ack",
+                "turn_index": 0,
+                "hasStreaming": False,
+            },
+            "hasStopButton": False,
+        }
+
+        result, _, _, _ = self.run_transaction(
+            [
+                submitted,
+                thinking,
+                final,
+                final,
+            ],
+            silence_ms=0,
+            pre_state_override=pre,
+            require_user_text_match=False,
+            expected_reply_prefix="PARLEY PROTOCOL A RECEIVED",
+            expected_reply_suffix="PARLEY PROTOCOL A RECEIVED",
+        )
+
+        self.assertTrue(result["response_complete"])
+        self.assertEqual(
+            result["response_text"],
+            "PARLEY PROTOCOL A RECEIVED",
+        )
+        self.assertEqual(
+            result["expected_reply_prefix"],
+            "PARLEY PROTOCOL A RECEIVED",
+        )
+        self.assertEqual(
+            result["expected_reply_suffix"],
+            "PARLEY PROTOCOL A RECEIVED",
+        )
+
     def test_pre_attachment_boundary_allows_attachment_rendered_user_text(self):
         pre = {
             "ok": True,

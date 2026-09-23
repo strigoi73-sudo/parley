@@ -1074,6 +1074,8 @@ def initialize_parley_pair(
             pre_state_override=pre_attachment_state,
             require_user_text_match=False,
             submission_timeout_ms=60000,
+            expected_reply_prefix=spec["ack"],
+            expected_reply_suffix=spec["ack"],
         )
         participants[label]["provision"] = ack_result
         if (
