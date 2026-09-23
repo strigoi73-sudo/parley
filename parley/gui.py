@@ -94,6 +94,8 @@ class ParleyApp:
         self._busy = False
         self._operation_stop = threading.Event()
         self._ui_queue = queue.Queue()
+        self._init_pending = set()
+        self._init_errors = {}
 
         self._build_style()
         self._build_ui()
@@ -775,71 +777,96 @@ class ParleyApp:
             return
 
         self.ready = {"A": False, "B": False}
+        self._init_pending = {"A", "B"}
+        self._init_errors = {}
         self._set_protocol_status("A", "Initializing…", WARN)
-        self._set_protocol_status("B", "Waiting…", MUTED)
+        self._set_protocol_status("B", "Initializing…", WARN)
         self._set_busy(True)
         self._operation_stop.clear()
-        self._activity("Initializing Chat A protocol")
+        self._activity("Initializing Chat A and Chat B protocols in parallel")
 
-        def worker():
-            a_result = workflows.send_and_wait(
+        specs = (
+            (
+                "A",
                 tab_a["id"],
                 ACTIVATE_A,
-                wait_timeout_ms=None,
-                expected_reply_prefix=TEST_A_REPLY_PREFIX,
-                expected_reply_suffix=TEST_A_REPLY_SUFFIX,
-                should_stop=self._operation_stop.is_set,
-            )
-            if not _result_ok(a_result):
-                self._post(self._protocol_failed, "A", a_result)
-                return
-            self._post(self._protocol_ready, "A")
-            self._post(self._set_protocol_status, "B", "Initializing…", WARN)
-            self._post(self._activity, "Initializing Chat B protocol")
-
-            b_result = workflows.send_and_wait(
+                TEST_A_REPLY_PREFIX,
+                TEST_A_REPLY_SUFFIX,
+            ),
+            (
+                "B",
                 tab_b["id"],
                 ACTIVATE_B,
-                wait_timeout_ms=None,
-                expected_reply_prefix=TEST_B_REPLY_PREFIX,
-                expected_reply_suffix=TEST_B_REPLY_SUFFIX,
-                should_stop=self._operation_stop.is_set,
-            )
-            if not _result_ok(b_result):
-                self._post(self._protocol_failed, "B", b_result)
-                return
-            self._post(self._protocol_ready, "B")
-            self._post(self._protocol_pair_ready)
+                TEST_B_REPLY_PREFIX,
+                TEST_B_REPLY_SUFFIX,
+            ),
+        )
 
-        self._run_worker(worker, "parley-gui-init")
+        for label, tab_id, activation, prefix, suffix in specs:
+            def worker(
+                label=label,
+                tab_id=tab_id,
+                activation=activation,
+                prefix=prefix,
+                suffix=suffix,
+            ):
+                try:
+                    result = workflows.send_and_wait(
+                        tab_id,
+                        activation,
+                        wait_timeout_ms=None,
+                        expected_reply_prefix=prefix,
+                        expected_reply_suffix=suffix,
+                        should_stop=self._operation_stop.is_set,
+                    )
+                except Exception as exc:
+                    result = {"error": str(exc), "response_complete": False}
+                self._post(self._protocol_finished, label, result)
 
-    def _protocol_ready(self, label):
-        self.ready[label] = True
-        self._set_protocol_status(label, "Ready", SUCCESS)
-        self._activity(f"Chat {label} protocol ready")
-        self._update_controls()
+            self._run_worker(worker, f"parley-gui-init-{label.lower()}")
 
-    def _protocol_pair_ready(self):
-        self._set_busy(False)
-        self._activity("Both protocols verified")
-        self._update_controls()
+    def _protocol_finished(self, label, result):
+        self._init_pending.discard(label)
 
-    def _protocol_failed(self, label, result):
-        self.ready[label] = False
-        error = result.get("error") if isinstance(result, dict) else str(result)
-        if error == "chatgpt_wait_stopped":
-            self._set_protocol_status(label, "Not initialized", MUTED)
-            self._set_busy(False)
-            self._activity(f"Chat {label} initialization cancelled")
+        if _result_ok(result):
+            self.ready[label] = True
+            self._set_protocol_status(label, "Ready", SUCCESS)
+            self._activity(f"Chat {label} protocol ready")
+        else:
+            self.ready[label] = False
+            error = result.get("error") if isinstance(result, dict) else str(result)
+            if error == "chatgpt_wait_stopped":
+                self._set_protocol_status(label, "Not initialized", MUTED)
+                self._activity(f"Chat {label} initialization cancelled")
+            else:
+                self._set_protocol_status(label, "Failed", DANGER)
+                self._init_errors[label] = error or str(result)
+                self._activity(
+                    f"Chat {label} initialization failed: "
+                    f"{self._init_errors[label]}"
+                )
+
+        if self._init_pending:
+            self._update_controls()
             return
 
-        self._set_protocol_status(label, "Failed", DANGER)
         self._set_busy(False)
-        self._activity(f"Chat {label} initialization failed: {error}")
-        messagebox.showerror(
-            "Protocol initialization failed",
-            f"Chat {label} did not complete protocol initialization.\n\n{error or result}",
-        )
+
+        if self.ready["A"] and self.ready["B"]:
+            self._activity("Both protocols verified")
+            self._set_phase("Ready")
+            return
+
+        if self._init_errors:
+            detail = "\n\n".join(
+                f"Chat {label}: {error}"
+                for label, error in sorted(self._init_errors.items())
+            )
+            messagebox.showerror(
+                "Protocol initialization failed",
+                "One or more chats did not complete protocol "
+                f"initialization.\n\n{detail}",
+            )
 
     def _rounds(self):
         try:
