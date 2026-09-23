@@ -37,6 +37,21 @@ class RelayCLITests(unittest.TestCase):
         self.assertTrue(options["fresh_chats"])
         self.assertTrue(options["initialize"])
 
+        self.assertTrue(options["fresh_a"])
+        self.assertTrue(options["fresh_b"])
+
+    def test_parse_relay_args_accepts_independent_fresh_roles(self):
+        options = cli._parse_relay_args([
+            "--fresh-a",
+            "--initialize",
+            "--rounds=2",
+        ])
+
+        self.assertTrue(options["fresh_a"])
+        self.assertFalse(options["fresh_b"])
+        self.assertFalse(options["fresh_chats"])
+        self.assertTrue(options["initialize"])
+
     def test_cmd_relay_fresh_chats_skips_tab_selection(self):
         fresh = {
             "ok": True,
@@ -88,6 +103,72 @@ class RelayCLITests(unittest.TestCase):
             ("FRESH-A", "FRESH-B"),
         )
         session_cls.assert_called_once()
+
+    def test_cmd_relay_mixes_fresh_a_with_existing_b(self):
+        tabs = [
+            {
+                "id": "EXISTING-B",
+                "title": "Existing B",
+                "url": "https://chatgpt.com/c/b",
+            },
+        ]
+        fresh = {
+            "ok": True,
+            "participant": "A",
+            "tab": {
+                "id": "FRESH-A",
+                "title": "Fresh ChatGPT A",
+                "url": "https://chatgpt.com/c/fresh-a",
+            },
+        }
+
+        with mock.patch.object(
+            cli,
+            "_chatgpt_tabs",
+            return_value=tabs,
+        ), mock.patch.object(
+            cli.workflows,
+            "create_fresh_chatgpt_participant",
+            return_value=fresh,
+        ) as create_one, mock.patch.object(
+            cli.workflows,
+            "initialize_parley_pair",
+            return_value={"ok": True, "participants": {}},
+        ) as initialize, mock.patch.object(
+            cli,
+            "RelaySession",
+        ) as session_cls, mock.patch.object(
+            cli,
+            "_run_interactive_relay",
+            return_value=0,
+        ):
+            code = cli.cmd_relay([
+                "--fresh-a",
+                "EXISTING-B",
+                "--initialize",
+                "--rounds=1",
+            ])
+
+        self.assertEqual(code, 0)
+        create_one.assert_called_once_with(
+            "A",
+            progress=cli._print_fresh_chat_progress,
+        )
+        initialize.assert_called_once()
+        self.assertEqual(
+            initialize.call_args.args,
+            ("FRESH-A", "EXISTING-B"),
+        )
+        session_cls.assert_called_once()
+
+    def test_cmd_relay_rejects_role_reference_with_same_fresh_role(self):
+        code = cli.cmd_relay([
+            "EXISTING-A",
+            "--fresh-a",
+            "--initialize",
+            "--rounds=1",
+        ])
+        self.assertEqual(code, 2)
 
     def test_resolve_tab_by_number_or_id(self):
         tabs = [
