@@ -286,9 +286,22 @@ def _parse_relay_args(parts):
     if rounds is not None and rounds < 1:
         raise ValueError("--rounds must be at least 1")
 
+    tab_a = positional[0] if len(positional) > 0 else None
+    tab_b = positional[1] if len(positional) > 1 else None
+
+    # When exactly one participant is fresh, one positional reference names
+    # the remaining existing participant regardless of whether that role is A
+    # or B.
+    if len(positional) == 1 and fresh_a and not fresh_b:
+        tab_a = None
+        tab_b = positional[0]
+    elif len(positional) == 1 and fresh_b and not fresh_a:
+        tab_a = positional[0]
+        tab_b = None
+
     return {
-        "tab_a": positional[0] if len(positional) > 0 else None,
-        "tab_b": positional[1] if len(positional) > 1 else None,
+        "tab_a": tab_a,
+        "tab_b": tab_b,
         "rounds": rounds,
         "include_text": include_text,
         "json_output": json_output,
