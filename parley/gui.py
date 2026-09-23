@@ -679,7 +679,13 @@ class ParleyApp:
     def _update_controls(self):
         active = bool(self.session and self.session.is_alive())
         ready = self.ready["A"] and self.ready["B"]
-        selected = bool(self._selected_tab("A") and self._selected_tab("B"))
+        tab_a = self._selected_tab("A")
+        tab_b = self._selected_tab("B")
+        selected = bool(
+            tab_a
+            and tab_b
+            and tab_a.get("id") != tab_b.get("id")
+        )
 
         self.refresh_button.configure(state="disabled" if self._busy or active else "normal")
         self.init_button.configure(
@@ -701,7 +707,7 @@ class ParleyApp:
             except Exception:
                 boundary = False
 
-        self.extend_button.configure(state="normal" if boundary else "disabled")
+        self.extend_button.configure(state="normal" if active else "disabled")
         self.finish_button.configure(state="normal" if boundary else "disabled")
         self.reset_button.configure(
             state="normal" if (boundary or (ready and not active and not self._busy)) else "disabled"
@@ -820,9 +826,15 @@ class ParleyApp:
 
     def _protocol_failed(self, label, result):
         self.ready[label] = False
+        error = result.get("error") if isinstance(result, dict) else str(result)
+        if error == "chatgpt_wait_stopped":
+            self._set_protocol_status(label, "Not initialized", MUTED)
+            self._set_busy(False)
+            self._activity(f"Chat {label} initialization cancelled")
+            return
+
         self._set_protocol_status(label, "Failed", DANGER)
         self._set_busy(False)
-        error = result.get("error") if isinstance(result, dict) else str(result)
         self._activity(f"Chat {label} initialization failed: {error}")
         messagebox.showerror(
             "Protocol initialization failed",
@@ -913,6 +925,11 @@ class ParleyApp:
     def _start_failed(self, result):
         self._set_busy(False)
         error = result.get("error") if isinstance(result, dict) else str(result)
+        if error == "chatgpt_wait_stopped":
+            self._set_phase("Ready")
+            self._activity("Session start cancelled")
+            return
+
         self._set_phase("Start failed")
         self._activity(f"Start failed: {error}")
         messagebox.showerror("Could not start session", error or str(result))
@@ -1017,6 +1034,10 @@ class ParleyApp:
     def _reset_failed(self, label, result):
         self._set_busy(False)
         error = result.get("error") if isinstance(result, dict) else str(result)
+        if error == "chatgpt_wait_stopped":
+            self._activity("Reset cancelled")
+            return
+
         self._activity(f"Reset failed at Chat {label}: {error}")
         messagebox.showerror("Reset failed", f"Chat {label}: {error or result}")
 
