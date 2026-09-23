@@ -102,6 +102,62 @@ class CoreFileInputTests(unittest.TestCase):
         self.assertEqual(evaluate.call_count, 2)
 
 
+class FreshChatCreationTests(unittest.TestCase):
+    def test_create_fresh_pair_creates_both_before_waiting(self):
+        operations = []
+
+        def create(url):
+            label = "A" if not operations else "B"
+            operations.append(("create", label, url))
+            return {
+                "ok": True,
+                "id": f"fresh-{label.lower()}",
+                "url": url,
+            }
+
+        def wait(tab_id, selector, timeout_ms):
+            operations.append(("wait", tab_id, selector, timeout_ms))
+            return {"found": True, "waited_ms": 10}
+
+        with mock.patch.object(
+            workflows.core,
+            "create_tab",
+            side_effect=create,
+        ), mock.patch.object(
+            workflows.core,
+            "wait_for",
+            side_effect=wait,
+        ), mock.patch.object(
+            workflows.core,
+            "tab_url",
+            side_effect=lambda tab_id: (
+                "https://chatgpt.com/"
+            ),
+        ):
+            result = workflows.create_fresh_chatgpt_pair(
+                ready_timeout_ms=4321,
+            )
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["A"]["id"], "fresh-a")
+        self.assertEqual(result["B"]["id"], "fresh-b")
+        self.assertEqual(
+            operations[:2],
+            [
+                ("create", "A", "https://chatgpt.com/"),
+                ("create", "B", "https://chatgpt.com/"),
+            ],
+        )
+        self.assertEqual(
+            operations[2:],
+            [
+                ("wait", "fresh-a", "#prompt-textarea", 4321),
+                ("wait", "fresh-b", "#prompt-textarea", 4321),
+            ],
+        )
+
+
+
 class AttachmentStabilizationTests(unittest.TestCase):
     def test_stabilization_wait_is_interruptible(self):
         stop = mock.Mock(side_effect=[False, True])

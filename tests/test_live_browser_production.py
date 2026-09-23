@@ -266,6 +266,35 @@ class LiveBrowserProductionTests(unittest.TestCase):
             "session-page-a",
         )
 
+    def test_live_create_tab_uses_browser_target_domain(self):
+        manager = mock.Mock()
+        manager.command.return_value = {"targetId": "fresh-page"}
+
+        with mock.patch.dict(
+            os.environ,
+            {"PARLEY_CONNECTION_MODE": "live"},
+            clear=False,
+        ), mock.patch.object(
+            core,
+            "live_browser_manager",
+            return_value=manager,
+        ):
+            result = core.create_tab("https://chatgpt.com/")
+
+        self.assertEqual(
+            result,
+            {
+                "ok": True,
+                "id": "fresh-page",
+                "url": "https://chatgpt.com/",
+            },
+        )
+        manager.command.assert_called_once_with(
+            "Target.createTarget",
+            {"url": "https://chatgpt.com/"},
+            timeout=10,
+        )
+
     def test_live_list_tabs_uses_target_domain(self):
         targets = [
             {

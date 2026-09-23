@@ -44,6 +44,8 @@ _PARLEY_PROTOCOL_DIR = Path(__file__).resolve().parent / "protocols"
 _PARLEY_PROTOCOL_WAIT_TIMEOUT_MS = 120000
 _PARLEY_ATTACHMENT_TIMEOUT_MS = 30000
 _PARLEY_ATTACHMENT_STABILIZE_SECONDS = 3.0
+_FRESH_CHATGPT_URL = "https://chatgpt.com/"
+_FRESH_CHAT_READY_TIMEOUT_MS = 30000
 _PARLEY_PROTOCOLS = {
     "A": {
         "filename": "PARLEY_TEST_CHAT_A_PROTOCOL.md",
@@ -738,6 +740,68 @@ def _parley_protocol_active(tab_id, spec):
 """
     result = core.evaluate(tab_id, expression, timeout=5)
     return bool(isinstance(result, dict) and result.get("ok") and result.get("seen"))
+
+
+
+def create_fresh_chatgpt_pair(
+    ready_timeout_ms=_FRESH_CHAT_READY_TIMEOUT_MS,
+):
+    """Create two clean ChatGPT tabs and wait for both composers."""
+    created = {}
+
+    for label in ("A", "B"):
+        result = core.create_tab(_FRESH_CHATGPT_URL)
+        if not isinstance(result, dict) or not result.get("ok"):
+            return {
+                "ok": False,
+                "error": (
+                    result.get("error")
+                    if isinstance(result, dict)
+                    else "fresh_chat_create_failed"
+                ) or "fresh_chat_create_failed",
+                "stage": "create_fresh_chat",
+                "participant": label,
+                "detail": result,
+                "created": created,
+            }
+
+        created[label] = {
+            "id": result["id"],
+            "title": f"Fresh ChatGPT {label}",
+            "url": result.get("url") or _FRESH_CHATGPT_URL,
+        }
+
+    for label in ("A", "B"):
+        tab = created[label]
+        ready = core.wait_for(
+            tab["id"],
+            "#prompt-textarea",
+            timeout_ms=ready_timeout_ms,
+        )
+        if not isinstance(ready, dict) or not ready.get("found"):
+            return {
+                "ok": False,
+                "error": (
+                    ready.get("error")
+                    if isinstance(ready, dict)
+                    else "fresh_chat_composer_timeout"
+                ) or "fresh_chat_composer_timeout",
+                "stage": "wait_fresh_chat",
+                "participant": label,
+                "detail": ready,
+                "created": created,
+            }
+
+        current_url = core.tab_url(tab["id"])
+        if current_url:
+            tab["url"] = current_url
+
+    return {
+        "ok": True,
+        "A": created["A"],
+        "B": created["B"],
+        "created": created,
+    }
 
 
 def _emit_protocol_progress(progress, label, stage, status, **extra):

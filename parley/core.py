@@ -30,6 +30,7 @@ from .live_browser import (
     chrome_user_data_dir,
     live_devtools_endpoint,
     live_target_infos,
+    live_browser_manager,
 )
 
 CDP_HOST = os.environ.get("PARLEY_CDP_HOST", "localhost")
@@ -263,6 +264,52 @@ def list_tabs():
                 "url": tab.get("url", ""),
             })
     return result
+
+
+
+def create_tab(url="about:blank"):
+    """Create a new page target and return its tab id.
+
+    Live mode uses the browser-level Target domain so the new tab belongs to
+    the already-running signed-in Chrome profile.
+    """
+    if connection_mode() != "live":
+        return {
+            "ok": False,
+            "error": "create_tab_requires_live_mode",
+        }
+
+    result = live_browser_manager().command(
+        "Target.createTarget",
+        {"url": str(url or "about:blank")},
+        timeout=10,
+    )
+    if not isinstance(result, dict):
+        return {
+            "ok": False,
+            "error": "create_tab_invalid_response",
+            "detail": result,
+        }
+    if result.get("error"):
+        return {
+            "ok": False,
+            "error": "create_tab_failed",
+            "detail": result,
+        }
+
+    target_id = result.get("targetId")
+    if not target_id:
+        return {
+            "ok": False,
+            "error": "create_tab_missing_target_id",
+            "detail": result,
+        }
+
+    return {
+        "ok": True,
+        "id": target_id,
+        "url": str(url or "about:blank"),
+    }
 
 
 def tab_url(tab_id):

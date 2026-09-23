@@ -1,6 +1,8 @@
 param(
     [ValidateRange(1, 1000000)]
-    [int]$Rounds
+    [int]$Rounds,
+
+    [switch]$FreshChats
 )
 
 $ErrorActionPreference = "Stop"
@@ -16,8 +18,13 @@ if (-not (Test-Path $Python)) {
 Write-Host "`n=== PARLEY LIVE RELAY v1 ===" -ForegroundColor Cyan
 Write-Host "Prerequisites:" -ForegroundColor Yellow
 Write-Host "  1. In normal Chrome, enable remote debugging at chrome://inspect/#remote-debugging"
-Write-Host "  2. Open two ChatGPT conversation tabs."
-Write-Host "  3. Leave both ChatGPT tabs open."
+if ($FreshChats) {
+    Write-Host "  2. Parley will create two fresh ChatGPT tabs automatically."
+    Write-Host "  3. Leave the created ChatGPT tabs open while the relay runs."
+} else {
+    Write-Host "  2. Open two ChatGPT conversation tabs."
+    Write-Host "  3. Leave both ChatGPT tabs open."
+}
 Write-Host ""
 Write-Host "Parley will provision and verify each chat's protocol file before activation." -ForegroundColor Yellow
 Write-Host "Startup is barriered: A file/ACK, B file/ACK, then A activation, then B activation." -ForegroundColor Yellow
@@ -38,6 +45,10 @@ $ParleyArgs = @(
 
 if ($PSBoundParameters.ContainsKey("Rounds")) {
     $ParleyArgs += @("--rounds", "$Rounds")
+}
+
+if ($FreshChats) {
+    $ParleyArgs += "--fresh-chats"
 }
 
 & $Python @ParleyArgs

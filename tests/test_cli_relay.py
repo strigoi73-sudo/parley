@@ -25,6 +25,67 @@ class RelayCLITests(unittest.TestCase):
         self.assertTrue(options["json_output"])
         self.assertTrue(options["prompt_a"])
         self.assertFalse(options["initialize"])
+        self.assertFalse(options["fresh_chats"])
+
+    def test_parse_relay_args_accepts_fresh_chats(self):
+        options = cli._parse_relay_args([
+            "--fresh-chats",
+            "--initialize",
+            "--rounds=1",
+        ])
+
+        self.assertTrue(options["fresh_chats"])
+        self.assertTrue(options["initialize"])
+
+    def test_cmd_relay_fresh_chats_skips_tab_selection(self):
+        fresh = {
+            "ok": True,
+            "A": {
+                "id": "FRESH-A",
+                "title": "Fresh ChatGPT A",
+                "url": "https://chatgpt.com/",
+            },
+            "B": {
+                "id": "FRESH-B",
+                "title": "Fresh ChatGPT B",
+                "url": "https://chatgpt.com/",
+            },
+        }
+
+        with mock.patch.object(
+            cli,
+            "_chatgpt_tabs",
+        ) as existing_tabs, mock.patch.object(
+            cli.workflows,
+            "create_fresh_chatgpt_pair",
+            return_value=fresh,
+        ) as create_pair, mock.patch.object(
+            cli.workflows,
+            "initialize_parley_pair",
+            return_value={"ok": True, "participants": {}},
+        ) as initialize, mock.patch.object(
+            cli,
+            "RelaySession",
+        ) as session_cls, mock.patch.object(
+            cli,
+            "_run_interactive_relay",
+            return_value=0,
+        ):
+            code = cli.cmd_relay([
+                "--fresh-chats",
+                "--initialize",
+                "--rounds=1",
+            ])
+
+        self.assertEqual(code, 0)
+        existing_tabs.assert_not_called()
+        create_pair.assert_called_once_with()
+        initialize.assert_called_once()
+        self.assertEqual(
+            initialize.call_args.args,
+            ("FRESH-A", "FRESH-B"),
+        )
+        session_cls.assert_called_once()
 
     def test_resolve_tab_by_number_or_id(self):
         tabs = [
