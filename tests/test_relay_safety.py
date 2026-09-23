@@ -478,5 +478,26 @@ class RelaySafetyTests(unittest.TestCase):
         self.assertEqual(control.state, "stopped")
 
 
+class RelaySessionHistoryTests(unittest.TestCase):
+    def test_session_history_returns_defensive_snapshots(self):
+        from parley.relay import RelaySession
+
+        session = RelaySession(lambda *args, **kwargs: {}, "A", "B", 1)
+        session._on_event({
+            "event": "transfer_completed",
+            "round": 1,
+            "direction": "A->B",
+            "response_text": "B reply",
+        })
+
+        transfers = session.transfers()
+        events = session.events()
+        transfers[0]["direction"] = "changed"
+        events[0]["event"] = "changed"
+
+        self.assertEqual(session.transfers()[0]["direction"], "A->B")
+        self.assertEqual(session.events()[0]["event"], "transfer_completed")
+
+
 if __name__ == "__main__":
     unittest.main()
