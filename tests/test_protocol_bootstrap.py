@@ -164,7 +164,7 @@ class AttachmentStabilizationTests(unittest.TestCase):
         with mock.patch.object(
             workflows.time,
             "monotonic",
-            side_effect=[0.0, 0.0],
+            return_value=0.0,
         ), mock.patch.object(
             workflows.time,
             "sleep",
