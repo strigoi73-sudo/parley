@@ -1076,6 +1076,8 @@ def initialize_parley_pair(
             submission_timeout_ms=60000,
             expected_reply_prefix=spec["ack"],
             expected_reply_suffix=spec["ack"],
+            retry_unsent_submission=True,
+            required_attachment_filename=spec["filename"],
         )
         participants[label]["provision"] = ack_result
         if (
@@ -1169,6 +1171,83 @@ def initialize_parley_pair(
     }
 
 
+
+def _chatgpt_unsent_submission_js(text, attachment_filename=None):
+    """Return JS proving the composer still holds the unsent transaction."""
+    expected = json.dumps(_normalize_chatgpt_text(text))
+    attachment = json.dumps(
+        str(attachment_filename)
+        if attachment_filename
+        else ""
+    )
+    return f"""
+(() => {{
+    const normalize = (value) => String(value || '')
+        .replace(/\\s+/g, ' ')
+        .trim();
+    const expected = {expected};
+    const attachmentName = {attachment};
+    const composer = document.querySelector('#prompt-textarea');
+    const rawText = composer
+        ? (
+            composer.tagName === 'TEXTAREA'
+                ? composer.value
+                : (composer.innerText || composer.textContent || '')
+        )
+        : '';
+    const button = document.querySelector(
+        'button[data-testid="send-button"]'
+    );
+    const stop = document.querySelector(
+        'button[data-testid="stop-button"],'
+        + 'button[aria-label*="Stop"],'
+        + 'button[aria-label*="stop"]'
+    );
+
+    let attachmentPresent = !attachmentName;
+    if (attachmentName) {{
+        const root = (
+            (composer && composer.closest('form')) ||
+            (composer && composer.parentElement &&
+                composer.parentElement.parentElement) ||
+            document.body
+        );
+        attachmentPresent = Array.from(
+            root.querySelectorAll('*')
+        ).some((el) => {{
+            if (el.children.length) return false;
+            return (el.textContent || '').trim() === attachmentName;
+        }}) || Array.from(
+            root.querySelectorAll('[title],[aria-label]')
+        ).some((el) => {{
+            const title = el.getAttribute('title') || '';
+            const aria = el.getAttribute('aria-label') || '';
+            return (
+                title.includes(attachmentName) ||
+                aria.includes(attachmentName)
+            );
+        }});
+    }}
+
+    const sendEnabled = !!(
+        button &&
+        !button.disabled &&
+        button.getAttribute('aria-disabled') !== 'true'
+    );
+    const exactText = normalize(rawText) === expected;
+    return {{
+        ok: true,
+        source: 'chatgpt-unsent-submission',
+        exactText,
+        sendEnabled,
+        hasStopButton: !!stop,
+        attachmentPresent,
+        composerChars: normalize(rawText).length,
+    }};
+}})()
+"""
+
+
 def _chatgpt_send_and_wait(
     tab_id,
     text,
@@ -1181,6 +1260,10 @@ def _chatgpt_send_and_wait(
     pre_state_override=None,
     require_user_text_match=True,
     submission_timeout_ms=10000,
+    retry_unsent_submission=False,
+    required_attachment_filename=None,
+    submission_retry_interval_ms=2000,
+    max_submission_attempts=4,
 ):
     """Strict ChatGPT send/wait transaction using one target connection.
 
@@ -1311,6 +1394,13 @@ def _chatgpt_send_and_wait(
                 detail=click,
             )
 
+        submission_attempts = 1
+        last_unsent_evidence = None
+        next_submission_retry = (
+            time.monotonic()
+            + (submission_retry_interval_ms / 1000.0)
+        )
+
         # Submission is not considered successful until ChatGPT's DOM proves a
         # newer user turn exists.
         submitted_state = None
@@ -1357,6 +1447,55 @@ def _chatgpt_send_and_wait(
                 submitted_state = state
                 human_reset_requested = True
                 break
+
+            if (
+                retry_unsent_submission
+                and submission_attempts < max_submission_attempts
+                and time.monotonic() >= next_submission_retry
+            ):
+                evidence = _chatgpt_eval(
+                    ws,
+                    _chatgpt_unsent_submission_js(
+                        text,
+                        required_attachment_filename,
+                    ),
+                    should_stop=should_stop,
+                )
+                last_unsent_evidence = evidence
+                if evidence.get("error") == "stopped":
+                    return fail(
+                        "chatgpt_wait_stopped",
+                        "verify_submission",
+                        submission_attempts=submission_attempts,
+                    )
+
+                safe_to_retry = bool(
+                    evidence.get("ok")
+                    and evidence.get("exactText")
+                    and evidence.get("sendEnabled")
+                    and not evidence.get("hasStopButton")
+                    and evidence.get("attachmentPresent")
+                )
+                if safe_to_retry:
+                    retry_click = _chatgpt_eval(
+                        ws,
+                        adapter.click_send_js,
+                        should_stop=should_stop,
+                    )
+                    if retry_click.get("error") == "stopped":
+                        return fail(
+                            "chatgpt_wait_stopped",
+                            "verify_submission",
+                            submission_attempts=submission_attempts,
+                        )
+                    if retry_click.get("ok"):
+                        submission_attempts += 1
+
+                next_submission_retry = (
+                    time.monotonic()
+                    + (submission_retry_interval_ms / 1000.0)
+                )
+
             time.sleep(0.1)
 
         if submitted_state is None:
@@ -1396,6 +1535,8 @@ def _chatgpt_send_and_wait(
                 user_text_verification_required=bool(
                     require_user_text_match
                 ),
+                submission_attempts=submission_attempts,
+                last_unsent_evidence=last_unsent_evidence,
             )
 
         # Test-protocol mode uses an explicit final-reply marker as positive
@@ -1548,6 +1689,7 @@ def _chatgpt_send_and_wait(
                         "expected_reply_prefix": expected_prefix,
                         "expected_reply_suffix": expected_suffix,
                         "human_reset_requested": human_reset_requested,
+                        "submission_attempts": submission_attempts,
                         "response_duration_ms": int(
                             (now - started) * 1000
                         ),

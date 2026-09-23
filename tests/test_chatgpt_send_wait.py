@@ -43,6 +43,10 @@ class ChatGPTSendAndWaitTests(unittest.TestCase):
         pre_state_override=None,
         require_user_text_match=True,
         submission_timeout_ms=10000,
+        retry_unsent_submission=False,
+        required_attachment_filename=None,
+        submission_retry_interval_ms=2000,
+        max_submission_attempts=4,
     ):
         ws = FakeSocket()
         clock = FakeClock()
@@ -71,6 +75,19 @@ class ChatGPTSendAndWaitTests(unittest.TestCase):
                     "ok": True,
                     "source": "chatgpt-strict",
                     "method": "chatgpt-send-button",
+                })
+            if (
+                isinstance(expression, str)
+                and "chatgpt-unsent-submission" in expression
+            ):
+                return runtime_value({
+                    "ok": True,
+                    "source": "chatgpt-unsent-submission",
+                    "exactText": True,
+                    "sendEnabled": True,
+                    "hasStopButton": False,
+                    "attachmentPresent": True,
+                    "composerChars": 5,
                 })
             if expression == self.adapter.turn_state_js:
                 if len(state_queue) > 1:
@@ -110,6 +127,10 @@ class ChatGPTSendAndWaitTests(unittest.TestCase):
                 pre_state_override=pre_state_override,
                 require_user_text_match=require_user_text_match,
                 submission_timeout_ms=submission_timeout_ms,
+                retry_unsent_submission=retry_unsent_submission,
+                required_attachment_filename=required_attachment_filename,
+                submission_retry_interval_ms=submission_retry_interval_ms,
+                max_submission_attempts=max_submission_attempts,
             )
 
         return result, ws, connect, calls
@@ -246,6 +267,71 @@ class ChatGPTSendAndWaitTests(unittest.TestCase):
             result["response_duration_ms"],
             1000,
         )
+
+    def test_attachment_ack_retries_only_while_composer_is_unsent(self):
+        pre = {
+            "ok": True,
+            "source": "chatgpt-strict",
+            "assistant_count": 0,
+            "user_count": 1,
+            "assistant": None,
+            "user": {
+                "text": "INITIAL PROMPT.  DO NOT REPLY.",
+                "turn_id": "seed-user",
+                "turn_index": 0,
+            },
+            "hasStopButton": False,
+        }
+        submitted = {
+            **pre,
+            "user_count": 2,
+            "user": {
+                "text": "protocol receipt request",
+                "turn_id": "ack-user",
+                "turn_index": 1,
+            },
+        }
+        final = {
+            **submitted,
+            "assistant_count": 1,
+            "assistant": {
+                "text": "PARLEY PROTOCOL B RECEIVED",
+                "turn_id": "ack-assistant",
+                "turn_index": 0,
+                "hasStreaming": False,
+            },
+            "hasStopButton": False,
+        }
+
+        waiting_states = [pre] * 22
+        result, _, _, calls = self.run_transaction(
+            waiting_states + [submitted, final, final],
+            timeout_ms=10000,
+            silence_ms=0,
+            pre_state_override=pre,
+            require_user_text_match=False,
+            expected_reply_prefix="PARLEY PROTOCOL B RECEIVED",
+            expected_reply_suffix="PARLEY PROTOCOL B RECEIVED",
+            retry_unsent_submission=True,
+            required_attachment_filename="PARLEY_TEST_CHAT_B_PROTOCOL.md",
+            submission_retry_interval_ms=2000,
+            max_submission_attempts=3,
+        )
+
+        self.assertTrue(result["response_complete"])
+        self.assertGreaterEqual(
+            result["submission_attempts"],
+            2,
+        )
+        send_clicks = [
+            call for call in calls
+            if (
+                call[0] == "Runtime.evaluate"
+                and (call[1] or {}).get("expression")
+                == self.adapter.click_send_js
+            )
+        ]
+        self.assertGreaterEqual(len(send_clicks), 2)
 
     def test_exact_ack_marker_ignores_thinking_surface(self):
         pre = {

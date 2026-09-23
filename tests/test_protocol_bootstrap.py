@@ -389,6 +389,16 @@ class ProtocolBootstrapTests(unittest.TestCase):
                 expected_ack,
             )
             self.assertTrue(
+                call.kwargs["retry_unsent_submission"]
+            )
+            self.assertIn(
+                call.kwargs["required_attachment_filename"],
+                (
+                    "PARLEY_TEST_CHAT_A_PROTOCOL.md",
+                    "PARLEY_TEST_CHAT_B_PROTOCOL.md",
+                ),
+            )
+            self.assertTrue(
                 call.kwargs["pre_state_override"]["ok"]
             )
         self.assertEqual(
