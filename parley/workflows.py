@@ -535,6 +535,37 @@ def _chatgpt_same_user_turn(expected_state, current_state):
 
 
 
+
+def _snapshot_chatgpt_state(tab_id, adapter=None, should_stop=None):
+    """Capture strict ChatGPT turn state before mutating the composer."""
+    if adapter is None:
+        adapter = _adapter_for_tab(tab_id)
+    if adapter is None or adapter.name != "chatgpt":
+        return {
+            "ok": False,
+            "error": "chatgpt_adapter_required",
+        }
+
+    ws = cdp_connect(tab_id, timeout=None)
+    if not ws:
+        return {
+            "ok": False,
+            "error": "cannot_connect_to_tab",
+        }
+
+    try:
+        return _chatgpt_state(
+            ws,
+            adapter,
+            should_stop=should_stop,
+        )
+    finally:
+        try:
+            ws.close()
+        except Exception:
+            pass
+
+
 def _chatgpt_attachment_ready_js(filename):
     """Return JS that confirms the selected file is represented in the composer."""
     name = json.dumps(str(filename))
@@ -759,6 +790,26 @@ def initialize_parley_pair(
             continue
 
         protocol_path = _PARLEY_PROTOCOL_DIR / spec["filename"]
+        adapter = _adapter_for_tab(tab_id)
+        pre_attachment_state = _snapshot_chatgpt_state(
+            tab_id,
+            adapter=adapter,
+            should_stop=should_stop,
+        )
+        if not pre_attachment_state.get("ok"):
+            return {
+                "ok": False,
+                "error": pre_attachment_state.get(
+                    "error",
+                    "parley_protocol_snapshot_failed",
+                ),
+                "stage": "protocol_snapshot",
+                "participant": label,
+                "response_complete": False,
+                "detail": pre_attachment_state,
+                "participants": participants,
+            }
+
         _emit_protocol_progress(
             progress,
             label,
@@ -796,11 +847,14 @@ def initialize_parley_pair(
         _emit_protocol_progress(
             progress, label, "protocol_ack", "waiting"
         )
-        ack_result = send_and_wait(
+        ack_result = _chatgpt_send_and_wait(
             tab_id,
             ack_prompt,
             wait_timeout_ms=wait_timeout_ms,
+            adapter=adapter,
             should_stop=should_stop,
+            pre_state_override=pre_attachment_state,
+            require_user_text_match=False,
         )
         participants[label]["provision"] = ack_result
         if (
@@ -903,6 +957,8 @@ def _chatgpt_send_and_wait(
     expected_reply_prefix=None,
     expected_reply_suffix=None,
     should_stop=None,
+    pre_state_override=None,
+    require_user_text_match=True,
 ):
     """Strict ChatGPT send/wait transaction using one target connection.
 
@@ -956,7 +1012,18 @@ def _chatgpt_send_and_wait(
         return result
 
     try:
-        pre_state = _chatgpt_state(ws, adapter, should_stop=should_stop)
+        pre_state = pre_state_override
+        if pre_state is None:
+            pre_state = _chatgpt_state(
+                ws,
+                adapter,
+                should_stop=should_stop,
+            )
+        if not isinstance(pre_state, dict):
+            return fail(
+                "chatgpt_snapshot_invalid",
+                "snapshot",
+            )
         if pre_state.get("error") == "stopped":
             return fail("chatgpt_wait_stopped", "snapshot")
         if not pre_state.get("ok"):
@@ -1041,7 +1108,16 @@ def _chatgpt_send_and_wait(
                     "verify_submission",
                     detail=state,
                 )
-            if _chatgpt_has_new_user(pre_state, state, text):
+            expected_user_text = (
+                text
+                if require_user_text_match
+                else None
+            )
+            if _chatgpt_has_new_user(
+                pre_state,
+                state,
+                expected_user_text,
+            ):
                 submitted_state = state
                 break
             if _chatgpt_has_new_user(pre_state, state, "RESET CHAT"):
@@ -1060,14 +1136,20 @@ def _chatgpt_send_and_wait(
             observed_user = (
                 (last_submission_state or {}).get("user") or {}
             )
+            pre_user = pre_state.get("user") or {}
             observed_text = _normalize_chatgpt_text(
                 observed_user.get("text")
+            )
+            pre_text = _normalize_chatgpt_text(
+                pre_user.get("text")
             )
             expected_text = _normalize_chatgpt_text(text)
             return fail(
                 "chatgpt_submission_not_verified",
                 "verify_submission",
                 pre_user_count=pre_user_count,
+                pre_user_turn_id=pre_user.get("turn_id"),
+                pre_user_chars=len(pre_text),
                 observed_user_count=int(
                     (last_submission_state or {}).get("user_count", 0)
                     or 0
@@ -1077,6 +1159,9 @@ def _chatgpt_send_and_wait(
                 expected_user_chars=len(expected_text),
                 expected_user_text_match=bool(
                     expected_text and observed_text == expected_text
+                ),
+                user_text_verification_required=bool(
+                    require_user_text_match
                 ),
             )
 

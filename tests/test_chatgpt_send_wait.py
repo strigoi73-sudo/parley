@@ -40,6 +40,8 @@ class ChatGPTSendAndWaitTests(unittest.TestCase):
         expected_reply_prefix=None,
         expected_reply_suffix=None,
         should_stop=None,
+        pre_state_override=None,
+        require_user_text_match=True,
     ):
         ws = FakeSocket()
         clock = FakeClock()
@@ -104,6 +106,8 @@ class ChatGPTSendAndWaitTests(unittest.TestCase):
                 expected_reply_prefix=expected_reply_prefix,
                 expected_reply_suffix=expected_reply_suffix,
                 should_stop=should_stop,
+                pre_state_override=pre_state_override,
+                require_user_text_match=require_user_text_match,
             )
 
         return result, ws, connect, calls
@@ -209,6 +213,58 @@ class ChatGPTSendAndWaitTests(unittest.TestCase):
         self.assertFalse(result["response_complete"])
         self.assertEqual(result["error"], "chatgpt_wait_stopped")
         self.assertGreaterEqual(checks["count"], 8)
+
+    def test_pre_attachment_boundary_allows_attachment_rendered_user_text(self):
+        pre = {
+            "ok": True,
+            "source": "chatgpt-strict",
+            "assistant_count": 0,
+            "user_count": 0,
+            "assistant": None,
+            "user": None,
+            "hasStopButton": False,
+        }
+        submitted = {
+            **pre,
+            "user_count": 1,
+            "user": {
+                "text": "protocol A received",
+                "turn_id": "user-file-turn",
+                "turn_index": 0,
+            },
+        }
+        started = {
+            **submitted,
+            "assistant_count": 1,
+            "assistant": {
+                "text": "PARLEY PROTOCOL A RECEIVED",
+                "turn_id": "assistant-ack",
+                "turn_index": 0,
+                "hasStreaming": True,
+            },
+            "hasStopButton": True,
+        }
+        finished = {
+            **started,
+            "assistant": {
+                **started["assistant"],
+                "hasStreaming": False,
+            },
+            "hasStopButton": False,
+        }
+
+        result, _, _, _ = self.run_transaction(
+            [submitted, started, finished, finished],
+            silence_ms=0,
+            pre_state_override=pre,
+            require_user_text_match=False,
+        )
+
+        self.assertTrue(result["response_complete"])
+        self.assertEqual(
+            result["response_text"],
+            "PARLEY PROTOCOL A RECEIVED",
+        )
 
     def test_completed_new_turn_uses_one_connection(self):
         old = {

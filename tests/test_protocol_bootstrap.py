@@ -148,13 +148,27 @@ class ProtocolBootstrapTests(unittest.TestCase):
             return_value=False,
         ), mock.patch.object(
             workflows,
+            "_snapshot_chatgpt_state",
+            return_value={
+                "ok": True,
+                "assistant_count": 0,
+                "user_count": 0,
+                "assistant": None,
+                "user": None,
+            },
+        ), mock.patch.object(
+            workflows,
             "attach_chatgpt_file",
             side_effect=attach,
         ), mock.patch.object(
             workflows,
+            "_chatgpt_send_and_wait",
+            side_effect=send,
+        ) as ack_send, mock.patch.object(
+            workflows,
             "send_and_wait",
             side_effect=send,
-        ) as send_wait:
+        ) as activation_send:
             result = workflows.initialize_parley_pair(
                 "A",
                 "B",
@@ -174,17 +188,21 @@ class ProtocolBootstrapTests(unittest.TestCase):
                 ("activation", "B"),
             ],
         )
-        self.assertEqual(send_wait.call_count, 4)
-        self.assertNotIn(
-            "expected_reply_prefix",
-            send_wait.call_args_list[0].kwargs,
-        )
+        self.assertEqual(ack_send.call_count, 2)
+        self.assertEqual(activation_send.call_count, 2)
+        for call in ack_send.call_args_list:
+            self.assertFalse(
+                call.kwargs["require_user_text_match"]
+            )
+            self.assertTrue(
+                call.kwargs["pre_state_override"]["ok"]
+            )
         self.assertEqual(
-            send_wait.call_args_list[2].kwargs["expected_reply_prefix"],
+            activation_send.call_args_list[0].kwargs["expected_reply_prefix"],
             "A REPLY:",
         )
         self.assertEqual(
-            send_wait.call_args_list[3].kwargs["expected_reply_suffix"],
+            activation_send.call_args_list[1].kwargs["expected_reply_suffix"],
             "B REPLY END",
         )
 
@@ -193,6 +211,16 @@ class ProtocolBootstrapTests(unittest.TestCase):
             workflows,
             "_parley_protocol_active",
             return_value=False,
+        ), mock.patch.object(
+            workflows,
+            "_snapshot_chatgpt_state",
+            return_value={
+                "ok": True,
+                "assistant_count": 0,
+                "user_count": 0,
+                "assistant": None,
+                "user": None,
+            },
         ), mock.patch.object(
             workflows,
             "attach_chatgpt_file",
@@ -230,27 +258,45 @@ class ProtocolBootstrapTests(unittest.TestCase):
             side_effect=[True, False],
         ), mock.patch.object(
             workflows,
+            "_snapshot_chatgpt_state",
+            return_value={
+                "ok": True,
+                "assistant_count": 0,
+                "user_count": 0,
+                "assistant": None,
+                "user": None,
+            },
+        ), mock.patch.object(
+            workflows,
             "attach_chatgpt_file",
             return_value={"ok": True},
         ) as attach, mock.patch.object(
             workflows,
+            "_chatgpt_send_and_wait",
+            side_effect=send,
+        ) as ack_send, mock.patch.object(
+            workflows,
             "send_and_wait",
             side_effect=send,
-        ) as send_wait:
+        ) as activation_send:
             result = workflows.initialize_parley_pair("A", "B")
 
         self.assertTrue(result["ok"])
         self.assertTrue(result["participants"]["A"]["already_active"])
         attach.assert_called_once()
         self.assertEqual(attach.call_args.args[0], "B")
-        self.assertEqual(send_wait.call_count, 2)
+        self.assertEqual(ack_send.call_count, 1)
         self.assertTrue(
-            send_wait.call_args_list[0].args[1].startswith(
+            ack_send.call_args.args[1].startswith(
                 "Read the attached Parley protocol file."
             )
         )
+        self.assertFalse(
+            ack_send.call_args.kwargs["require_user_text_match"]
+        )
+        self.assertEqual(activation_send.call_count, 1)
         self.assertEqual(
-            send_wait.call_args_list[1].args,
+            activation_send.call_args.args,
             ("B", "INITIALIZE PARLEY TEST CHAT B"),
         )
 
