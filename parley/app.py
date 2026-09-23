@@ -884,6 +884,9 @@ class ParleyApp:
 
         if stage == "fresh_chats":
             text = "Creating fresh ChatGPT conversations…"
+        elif stage == "focus_emulation" and label:
+            text = f"Keeping Chat {label} active in the background…"
+            self._set_participant(label, "Background active", SUCCESS)
         elif stage == "initial_prompt" and label:
             text = f"Establishing Chat {label}…"
             if status == "complete":
@@ -922,6 +925,14 @@ class ParleyApp:
         self.startup_stage.configure(text=text)
         self.phase_value.configure(text=text.rstrip("…"))
         self._diagnostic(text.rstrip("…"))
+        activity = event.get("page_activity")
+        if label and isinstance(activity, dict):
+            self._diagnostic(
+                f"Chat {label} renderer: "
+                f"visibility={activity.get('visibilityState')} "
+                f"hidden={activity.get('hidden')} "
+                f"hasFocus={activity.get('hasFocus')}"
+            )
 
     def _startup_finished(self, result, prompt, rounds):
         self.startup_progress.stop()
@@ -1184,6 +1195,14 @@ class ParleyApp:
                     **item
                 )
             )
+            activity = item.get("response_page_activity")
+            if isinstance(activity, dict):
+                self._diagnostic(
+                    f"Chat {label} renderer: "
+                    f"visibility={activity.get('visibilityState')} "
+                    f"hidden={activity.get('hidden')} "
+                    f"hasFocus={activity.get('hasFocus')}"
+                )
 
         events = session.events()
         while self._seen_events < len(events):

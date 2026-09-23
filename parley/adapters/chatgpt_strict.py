@@ -96,7 +96,10 @@ function collectTurns(roleName) {
     source:'chatgpt-strict',
     isLatest:true,
     hasStreaming:streaming,
-    hasStopButton:!!stop
+    hasStopButton:!!stop,
+    visibilityState:document.visibilityState,
+    hidden:!!document.hidden,
+    hasFocus:document.hasFocus()
   };
 })()
 """
@@ -286,7 +289,10 @@ function collectTurns(roleName) {
     user_count:userTurns.nodes.length,
     assistant:assistant,
     user:user,
-    hasStopButton:!!stop
+    hasStopButton:!!stop,
+    visibilityState:document.visibilityState,
+    hidden:!!document.hidden,
+    hasFocus:document.hasFocus()
   };
 })()
 """

@@ -151,6 +151,62 @@ def _adapter_for_tab(tab_id):
     return detect(url)
 
 
+def _chatgpt_page_activity(value):
+    """Normalize renderer visibility/focus evidence from strict ChatGPT state."""
+    if not isinstance(value, dict):
+        return None
+    if not any(
+        key in value
+        for key in ("visibilityState", "hidden", "hasFocus")
+    ):
+        return None
+    return {
+        "visibilityState": value.get("visibilityState"),
+        "hidden": value.get("hidden"),
+        "hasFocus": value.get("hasFocus"),
+    }
+
+
+def _chatgpt_focused_eval(tab_id, expression):
+    """Evaluate ChatGPT state while renderer focus emulation is asserted."""
+    ws = cdp_connect(tab_id, timeout=None)
+    if not ws:
+        return {
+            "ok": False,
+            "error": "cannot_connect_to_tab",
+        }
+    try:
+        focus = core.set_focus_emulation(
+            tab_id,
+            True,
+            timeout=None,
+            ws=ws,
+        )
+        if not focus.get("ok"):
+            return {
+                "ok": False,
+                "error": "chatgpt_focus_emulation_failed",
+                "detail": focus,
+            }
+        value = core.evaluate(
+            tab_id,
+            expression,
+            timeout=None,
+            ws=ws,
+        )
+        if isinstance(value, dict) and value.get("ok"):
+            value = dict(value)
+            activity = _chatgpt_page_activity(value)
+            if activity is not None:
+                value["page_activity"] = activity
+        return value
+    finally:
+        try:
+            ws.close()
+        except Exception:
+            pass
+
+
 def _response_js(tab_id):
     """Return the site-specific response extractor for this tab.
 
@@ -174,12 +230,17 @@ def _message_count_js(tab_id):
 
 def read_response(tab_id):
     """Return the latest AI response object {text, source, hasStreaming, ...}."""
-    val = core.evaluate(
+    adapter = _adapter_for_tab(tab_id)
+    if adapter is not None and adapter.name == "chatgpt":
+        return _chatgpt_focused_eval(
+            tab_id,
+            adapter.response_js,
+        )
+    return core.evaluate(
         tab_id,
         _response_js(tab_id),
         timeout=None,
     )
-    return val
 
 
 def read_turn_state(tab_id):
@@ -189,10 +250,9 @@ def read_turn_state(tab_id):
         return {"ok": False, "error": "tab_url_unavailable"}
     if adapter.name != "chatgpt":
         return {"ok": False, "error": "chatgpt_adapter_required"}
-    return core.evaluate(
+    return _chatgpt_focused_eval(
         tab_id,
         adapter.turn_state_js,
-        timeout=None,
     )
 
 
@@ -286,8 +346,23 @@ def send(tab_id, text):
     if not ws:
         return {"error": "cannot connect to tab"}
     try:
+        adapter = _adapter_for_tab(tab_id)
+        if adapter is not None and adapter.name == "chatgpt":
+            focus = core.set_focus_emulation(
+                tab_id,
+                True,
+                timeout=None,
+                ws=ws,
+            )
+            if not focus.get("ok"):
+                return {
+                    "error": "chatgpt_focus_emulation_failed",
+                    "detail": focus,
+                }
         result, ws = robust_send(ws, tab_id, text)
         result["ok"] = True
+        if adapter is not None and adapter.name == "chatgpt":
+            result["focus_emulation"] = True
         return result
     finally:
         try:
@@ -561,6 +636,19 @@ def _snapshot_chatgpt_state(tab_id, adapter=None, should_stop=None):
         }
 
     try:
+        focus = core.set_focus_emulation(
+            tab_id,
+            True,
+            timeout=None,
+            ws=ws,
+            should_stop=should_stop,
+        )
+        if not focus.get("ok"):
+            return {
+                "ok": False,
+                "error": "chatgpt_focus_emulation_failed",
+                "detail": focus,
+            }
         return _chatgpt_state(
             ws,
             adapter,
@@ -628,6 +716,20 @@ def attach_chatgpt_file(
     adapter = _adapter_for_tab(tab_id)
     if adapter is None or adapter.name != "chatgpt":
         return {"ok": False, "error": "chatgpt_adapter_required"}
+
+    focus = core.set_focus_emulation(
+        tab_id,
+        True,
+        timeout=None,
+        should_stop=should_stop,
+    )
+    if not focus.get("ok"):
+        return {
+            "ok": False,
+            "error": "chatgpt_focus_emulation_failed",
+            "stage": "focus_emulation",
+            "detail": focus,
+        }
 
     path = Path(file_path).expanduser().resolve()
     if not path.is_file():
@@ -804,6 +906,7 @@ def _initiate_fresh_chatgpt_tab(
                         "tab_id": tab_id,
                         "url": last_url,
                         "prompt": prompt,
+                        "page_activity": _chatgpt_page_activity(state),
                         "duration_ms": int(
                             (time.monotonic() - started) * 1000
                         ),
@@ -854,6 +957,27 @@ def create_fresh_chatgpt_pair(
 
     for label in ("A", "B"):
         tab = created[label]
+        focus = core.set_focus_emulation(
+            tab["id"],
+            True,
+            timeout=None,
+        )
+        if not focus.get("ok"):
+            return {
+                "ok": False,
+                "error": "fresh_chat_focus_emulation_failed",
+                "stage": "focus_emulation",
+                "participant": label,
+                "detail": focus,
+                "created": created,
+            }
+        if callable(progress):
+            progress({
+                "label": label,
+                "stage": "focus_emulation",
+                "status": "complete",
+            })
+
         ready = core.wait_for(
             tab["id"],
             "#prompt-textarea",
@@ -912,6 +1036,7 @@ def create_fresh_chatgpt_pair(
                 "stage": "initial_prompt",
                 "status": "complete",
                 "url": tab["url"],
+                "page_activity": initiated.get("page_activity"),
             })
 
     return {
@@ -1475,6 +1600,20 @@ def _chatgpt_send_and_wait(
         return result
 
     try:
+        focus = core.set_focus_emulation(
+            tab_id,
+            True,
+            timeout=None,
+            ws=ws,
+            should_stop=should_stop,
+        )
+        if not focus.get("ok"):
+            return fail(
+                "chatgpt_focus_emulation_failed",
+                "focus_emulation",
+                detail=focus,
+            )
+
         pre_state = pre_state_override
         if pre_state is None:
             pre_state = _chatgpt_state(
@@ -1695,6 +1834,9 @@ def _chatgpt_send_and_wait(
                 ),
                 submission_attempts=submission_attempts,
                 last_unsent_evidence=last_unsent_evidence,
+                page_activity=_chatgpt_page_activity(
+                    last_submission_state or {}
+                ),
             )
 
         # Test-protocol mode uses an explicit final-reply marker as positive
@@ -1848,6 +1990,8 @@ def _chatgpt_send_and_wait(
                         "expected_reply_suffix": expected_suffix,
                         "human_reset_requested": human_reset_requested,
                         "submission_attempts": submission_attempts,
+                        "focus_emulation": True,
+                        "page_activity": _chatgpt_page_activity(state),
                         "response_duration_ms": int(
                             (now - started) * 1000
                         ),
@@ -2029,6 +2173,8 @@ def _chatgpt_send_and_wait(
                     "response_turn_index": current_turn_index,
                     "response_source": "chatgpt-strict",
                     "response_candidate_replacements": candidate_replacements,
+                    "focus_emulation": True,
+                    "page_activity": _chatgpt_page_activity(state),
                     "response_duration_ms": int(
                         (now - started) * 1000
                     ),

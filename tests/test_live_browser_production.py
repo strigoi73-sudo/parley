@@ -266,6 +266,38 @@ class LiveBrowserProductionTests(unittest.TestCase):
             "session-page-a",
         )
 
+    def test_focus_emulation_uses_target_session_without_activation(self):
+        ws = mock.Mock()
+        ws.command.return_value = {}
+
+        with mock.patch.object(
+            core,
+            "cdp_connect",
+            return_value=ws,
+        ):
+            result = core.set_focus_emulation(
+                "page-a",
+                True,
+                timeout=None,
+            )
+
+        self.assertEqual(
+            result,
+            {"ok": True, "enabled": True},
+        )
+        ws.command.assert_called_once_with(
+            "Emulation.setFocusEmulationEnabled",
+            {"enabled": True},
+            timeout=None,
+        )
+        methods = [
+            call.args[0]
+            for call in ws.command.call_args_list
+        ]
+        self.assertNotIn("Target.activateTarget", methods)
+        self.assertNotIn("Page.bringToFront", methods)
+        ws.close.assert_called_once()
+
     def test_live_create_tab_uses_browser_target_domain(self):
         manager = mock.Mock()
         manager.command.return_value = {"targetId": "fresh-page"}

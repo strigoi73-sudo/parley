@@ -98,11 +98,30 @@ class ChatGPTSendAndWaitTests(unittest.TestCase):
 
             raise AssertionError("unexpected CDP call: %r" % ((method, params),))
 
+        def fake_focus(
+            _tab_id,
+            enabled=True,
+            timeout=None,
+            ws=None,
+            should_stop=None,
+        ):
+            calls.append((
+                "Emulation.setFocusEmulationEnabled",
+                {"enabled": bool(enabled)},
+                timeout,
+                should_stop,
+            ))
+            return {"ok": True, "enabled": bool(enabled)}
+
         with mock.patch.object(
             workflows,
             "cdp_connect",
             return_value=ws,
         ) as connect, mock.patch.object(
+            workflows.core,
+            "set_focus_emulation",
+            side_effect=fake_focus,
+        ), mock.patch.object(
             workflows,
             "cdp_send",
             side_effect=fake_cdp_send,

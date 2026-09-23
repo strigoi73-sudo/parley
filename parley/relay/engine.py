@@ -73,6 +73,7 @@ def _initial_turn(value):
         "turn_id": value.get("turn_id"),
         "turn_index": value.get("turn_index"),
         "source": "chatgpt-strict",
+        "page_activity": value.get("page_activity"),
     }, None
 
 
@@ -99,6 +100,7 @@ def _completed_reply(value):
         "turn_id": value.get("response_turn_id"),
         "turn_index": value.get("response_turn_index"),
         "source": "chatgpt-strict",
+        "page_activity": value.get("page_activity"),
     }, None
 
 
@@ -125,6 +127,14 @@ def _transfer_record(
         "response_chars": len(response_turn["text"]),
         "response_hash": turn_text_hash(response_turn),
     }
+    if source_turn.get("page_activity") is not None:
+        record["source_page_activity"] = source_turn.get(
+            "page_activity"
+        )
+    if response_turn.get("page_activity") is not None:
+        record["response_page_activity"] = response_turn.get(
+            "page_activity"
+        )
     if include_text:
         record["source_text"] = source_turn["text"]
         record["response_text"] = response_turn["text"]

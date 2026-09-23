@@ -323,6 +323,64 @@ def tab_url(tab_id):
     return ""
 
 
+def set_focus_emulation(
+    tab_id,
+    enabled=True,
+    timeout=None,
+    ws=None,
+    should_stop=None,
+):
+    """Simulate a focused/active page without activating its Chrome tab."""
+    own = ws is None
+    if own:
+        ws = cdp_connect(tab_id, timeout=timeout)
+        if not ws:
+            return {
+                "ok": False,
+                "error": "cannot_connect_to_tab",
+                "enabled": bool(enabled),
+            }
+    try:
+        result = cdp_send_with_retry(
+            ws,
+            "Emulation.setFocusEmulationEnabled",
+            {"enabled": bool(enabled)},
+            timeout=timeout,
+            tab_id=tab_id,
+            should_stop=should_stop,
+        )
+        if not isinstance(result, dict):
+            return {
+                "ok": False,
+                "error": "focus_emulation_invalid_response",
+                "enabled": bool(enabled),
+                "detail": result,
+            }
+        if result.get("error") == "stopped":
+            return {
+                "ok": False,
+                "error": "stopped",
+                "enabled": bool(enabled),
+            }
+        if result.get("error"):
+            return {
+                "ok": False,
+                "error": "focus_emulation_failed",
+                "enabled": bool(enabled),
+                "detail": result,
+            }
+        return {
+            "ok": True,
+            "enabled": bool(enabled),
+        }
+    finally:
+        if own:
+            try:
+                ws.close()
+            except Exception:
+                pass
+
+
 def evaluate(tab_id, js, await_promise=False, timeout=10, ws=None):
     """Evaluate JavaScript in a tab and return the (by-value) result.
 

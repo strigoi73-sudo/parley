@@ -51,6 +51,8 @@ class InitializationSocket:
             result = {"sessionId": params["targetId"]}
         elif method == "Target.detachFromTarget":
             result = {}
+        elif method == "Emulation.setFocusEmulationEnabled":
+            result = {}
         elif method == "Input.insertText":
             self.inserted[label] = params["text"]
             result = {}

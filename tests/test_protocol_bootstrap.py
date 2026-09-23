@@ -60,6 +60,10 @@ class CoreFileInputTests(unittest.TestCase):
                     return_value=adapter,
                 ), mock.patch.object(
                     workflows.core,
+                    "set_focus_emulation",
+                    return_value={"ok": True, "enabled": True},
+                ) as focus, mock.patch.object(
+                    workflows.core,
                     "set_file_input_files",
                     side_effect=[
                         {
@@ -93,6 +97,12 @@ class CoreFileInputTests(unittest.TestCase):
             )
 
         self.assertTrue(result["ok"])
+        focus.assert_called_once_with(
+            "TAB",
+            True,
+            timeout=None,
+            should_stop=None,
+        )
         self.assertEqual(set_file.call_count, 2)
         for call in set_file.call_args_list:
             self.assertEqual(
@@ -185,6 +195,10 @@ class FreshChatCreationTests(unittest.TestCase):
                 "url": url,
             }
 
+        def focus(tab_id, enabled, timeout=None):
+            operations.append(("focus", tab_id, enabled, timeout))
+            return {"ok": True, "enabled": enabled}
+
         def wait(tab_id, selector, timeout_ms):
             operations.append(("wait", tab_id, selector, timeout_ms))
             return {"found": True, "waited_ms": 10}
@@ -201,6 +215,10 @@ class FreshChatCreationTests(unittest.TestCase):
             workflows.core,
             "create_tab",
             side_effect=create,
+        ), mock.patch.object(
+            workflows.core,
+            "set_focus_emulation",
+            side_effect=focus,
         ), mock.patch.object(
             workflows.core,
             "wait_for",
@@ -227,7 +245,9 @@ class FreshChatCreationTests(unittest.TestCase):
             [
                 ("create", "A", "https://chatgpt.com/"),
                 ("create", "B", "https://chatgpt.com/"),
+                ("focus", "fresh-a", True, None),
                 ("wait", "fresh-a", "#prompt-textarea", 4321),
+                ("focus", "fresh-b", True, None),
                 ("wait", "fresh-b", "#prompt-textarea", 4321),
                 ("initiate", "fresh-a"),
                 ("initiate", "fresh-b"),
@@ -235,7 +255,14 @@ class FreshChatCreationTests(unittest.TestCase):
         )
         self.assertEqual(
             [event["status"] for event in progress],
-            ["starting", "complete", "starting", "complete"],
+            [
+                "complete",
+                "complete",
+                "starting",
+                "complete",
+                "starting",
+                "complete",
+            ],
         )
 
 

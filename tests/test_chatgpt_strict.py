@@ -70,6 +70,15 @@ class StrictChatGPTExtractorTests(unittest.TestCase):
         )
         self.assertNotIn("document.body.innerText", CHATGPT_GET_TURN_STATE_JS)
 
+    def test_turn_state_exposes_renderer_activity(self):
+        for token in (
+            "visibilityState:document.visibilityState",
+            "hidden:!!document.hidden",
+            "hasFocus:document.hasFocus()",
+        ):
+            self.assertIn(token, CHATGPT_GET_TURN_STATE_JS)
+            self.assertIn(token, CHATGPT_GET_RESPONSE_JS)
+
     def test_user_turn_prefers_message_body_over_role_wrapper(self):
         self.assertIn(
             "role.querySelector('.whitespace-pre-wrap')",
@@ -173,11 +182,20 @@ class WorkflowRoutingTests(unittest.TestCase):
             "assistant_count": 1,
         }
 
+        ws = mock.Mock()
         with mock.patch.object(
             workflows.core,
             "tab_url",
             return_value="https://chatgpt.com/c/test",
         ), mock.patch.object(
+            workflows,
+            "cdp_connect",
+            return_value=ws,
+        ), mock.patch.object(
+            workflows.core,
+            "set_focus_emulation",
+            return_value={"ok": True, "enabled": True},
+        ) as focus, mock.patch.object(
             workflows.core,
             "evaluate",
             return_value=expected,
@@ -185,11 +203,19 @@ class WorkflowRoutingTests(unittest.TestCase):
             result = workflows.read_turn_state("tab-a")
 
         self.assertEqual(result, expected)
+        focus.assert_called_once_with(
+            "tab-a",
+            True,
+            timeout=None,
+            ws=ws,
+        )
         evaluate.assert_called_once_with(
             "tab-a",
             CHATGPT_GET_TURN_STATE_JS,
             timeout=None,
+            ws=ws,
         )
+        ws.close.assert_called_once()
 
     def test_read_response_uses_strict_chatgpt_script(self):
         expected = {
@@ -199,11 +225,20 @@ class WorkflowRoutingTests(unittest.TestCase):
             "source": "chatgpt-strict",
         }
 
+        ws = mock.Mock()
         with mock.patch.object(
             workflows.core,
             "tab_url",
             return_value="https://chatgpt.com/c/test",
         ), mock.patch.object(
+            workflows,
+            "cdp_connect",
+            return_value=ws,
+        ), mock.patch.object(
+            workflows.core,
+            "set_focus_emulation",
+            return_value={"ok": True, "enabled": True},
+        ) as focus, mock.patch.object(
             workflows.core,
             "evaluate",
             return_value=expected,
@@ -211,11 +246,19 @@ class WorkflowRoutingTests(unittest.TestCase):
             result = workflows.read_response("tab-a")
 
         self.assertEqual(result, expected)
+        focus.assert_called_once_with(
+            "tab-a",
+            True,
+            timeout=None,
+            ws=ws,
+        )
         evaluate.assert_called_once_with(
             "tab-a",
             CHATGPT_GET_RESPONSE_JS,
             timeout=None,
+            ws=ws,
         )
+        ws.close.assert_called_once()
 
     def test_robust_send_snapshots_previous_text_with_strict_script(self):
         ws = mock.Mock()
