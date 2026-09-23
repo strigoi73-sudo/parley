@@ -537,6 +537,59 @@ class RelayCLITests(unittest.TestCase):
         self.assertEqual(code, 1)
         session_cls.assert_not_called()
 
+    def test_interactive_relay_treats_user_stop_as_clean_exit(self):
+        class FakeSession:
+            exception = None
+
+            def __init__(self):
+                self.alive = True
+                self._result = {
+                    "status": "stopped",
+                    "state": "STOPPED",
+                    "rounds_requested": 5,
+                    "rounds_completed": 1,
+                    "transfers": [],
+                }
+
+            def start(self):
+                return self
+
+            def is_alive(self):
+                return self.alive
+
+            def stop(self):
+                self.alive = False
+
+            def join(self):
+                return self._result
+
+            def status(self):
+                return {
+                    "status": "running" if self.alive else "stopped",
+                    "state": "TRANSFER_B_TO_A" if self.alive else "STOPPED",
+                    "control": "running",
+                    "rounds_completed": 1,
+                    "rounds_requested": 5,
+                    "awaiting_extension": False,
+                    "transfers_completed": 0,
+                    "last_transfer": None,
+                }
+
+        output = io.StringIO()
+        with mock.patch("sys.stdout", output):
+            code = cli._run_interactive_relay(
+                FakeSession(),
+                input_stream=io.StringIO("q\n"),
+                output_json=False,
+                sleep=lambda _: None,
+            )
+
+        rendered = output.getvalue()
+        self.assertEqual(code, 0)
+        self.assertIn("Stop requested.", rendered)
+        self.assertIn("Relay stopped by user.", rendered)
+        self.assertNotIn('"status": "stopped"', rendered)
+
     def test_interactive_relay_treats_coordinated_reset_as_success(self):
         class FakeSession:
             exception = None

@@ -2,7 +2,9 @@ param(
     [ValidateRange(1, 1000000)]
     [int]$Rounds,
 
-    [switch]$FreshChats
+    [switch]$FreshChats,
+
+    [switch]$Json
 )
 
 $ErrorActionPreference = "Stop"
@@ -43,8 +45,7 @@ $ParleyArgs = @(
     ".\parley.py",
     "relay",
     "--initialize",
-    "--prompt-a",
-    "--json"
+    "--prompt-a"
 )
 
 if ($PSBoundParameters.ContainsKey("Rounds")) {
@@ -55,9 +56,13 @@ if ($FreshChats) {
     $ParleyArgs += "--fresh-chats"
 }
 
+if ($Json) {
+    $ParleyArgs += "--json"
+}
+
 & $Python @ParleyArgs
 if ($LASTEXITCODE -ne 0) {
     throw "Parley live relay v1 failed."
 }
 
-Write-Host "`nParley live relay v1 completed successfully." -ForegroundColor Green
+Write-Host "`nParley live relay v1 ended cleanly." -ForegroundColor Green

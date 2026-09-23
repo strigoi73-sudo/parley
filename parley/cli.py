@@ -347,13 +347,16 @@ def _print_transfer_progress(item):
     )
 
 
-def _print_relay_summary(result):
+def _print_relay_summary(result, user_stop_requested=False):
     if not isinstance(result, dict):
         print("Relay ended without a structured result.")
         return
 
     print()
-    print("Relay finished: %s" % result.get("status", "unknown"))
+    if user_stop_requested and result.get("status") == "stopped":
+        print("Relay stopped by user.")
+    else:
+        print("Relay finished: %s" % result.get("status", "unknown"))
     print(
         "Rounds completed: %s/%s"
         % (
@@ -512,6 +515,7 @@ def _run_interactive_relay(
     round_limit_prompted = False
     awaiting_extension_total = False
     reset_detection_requested = False
+    user_stop_requested = False
 
     try:
         while session.is_alive():
@@ -569,6 +573,7 @@ def _run_interactive_relay(
                         continue
 
                     if command in ("q", "x", "stop"):
+                        user_stop_requested = True
                         message = _handle_relay_command(command, session)
                         if message:
                             print(message)
@@ -629,6 +634,8 @@ def _run_interactive_relay(
                     continue
 
                 if command in ("q", "x", "stop", "s", "status"):
+                    if command in ("q", "x", "stop"):
+                        user_stop_requested = True
                     message = _handle_relay_command(command, session)
                     if message:
                         print(message)
@@ -640,6 +647,8 @@ def _run_interactive_relay(
                 )
                 continue
 
+            if command in ("q", "x", "stop"):
+                user_stop_requested = True
             message = _handle_relay_command(command, session)
             if message:
                 print(message)
@@ -649,6 +658,7 @@ def _run_interactive_relay(
             "Interrupt received. Requesting safe stop after the "
             "current browser transaction."
         )
+        user_stop_requested = True
         session.stop()
 
     result = session.join()
@@ -662,13 +672,20 @@ def _run_interactive_relay(
         print("Relay worker failed: %s" % session.exception)
         return 1
 
-    _print_relay_summary(result)
+    _print_relay_summary(
+        result,
+        user_stop_requested=user_stop_requested,
+    )
     if output_json:
         _print(result)
     clean_result = bool(
         isinstance(result, dict)
         and (
             result.get("status") == "complete"
+            or (
+                result.get("status") == "stopped"
+                and user_stop_requested
+            )
             or (
                 result.get("status") == "stopped"
                 and result.get("reset_requested")
