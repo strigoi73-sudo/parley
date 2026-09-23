@@ -262,8 +262,8 @@ class ParleyApp:
         tk.Label(
             content,
             text=(
-                "Give A and B a question, problem, or topic. Parley will create "
-                "both ChatGPT conversations and prepare them automatically."
+                "Give A and B a question, problem, or topic. Choose a fresh "
+                "conversation or an eligible open ChatGPT tab for each role."
             ),
             bg=PANEL,
             fg=MUTED,
@@ -352,9 +352,9 @@ class ParleyApp:
         tk.Label(
             note,
             text=(
-                "Parley creates two fresh chats, establishes both conversations, "
-                "provisions the A/B protocols, verifies them, and starts the relay. "
-                "No manual tab selection or protocol setup is required."
+                "Parley resolves A and B from the choices above, creates any fresh "
+                "participants, provisions and verifies the A/B protocols, then starts "
+                "the relay. Existing and fresh chats can be mixed independently."
             ),
             bg=PANEL_ALT,
             fg=TEXT,
