@@ -666,20 +666,12 @@ Deliverables:
 
 ### Phase 7 — Desktop UI
 
-Only begin after CLI relay is stable.
+Status: **Legacy UI removed on 2026-09-23; redesign pending.**
 
-Likely controls:
-
-- A tab selector;
-- B tab selector;
-- Start;
-- Pause;
-- Resume;
-- Stop;
-- max rounds;
-- status;
-- compact transcript/audit view;
-- tray behavior if desired.
+The original Tkinter desktop console and its launcher/tests were removed after
+the fresh-chat production workflow became the authoritative operating model.
+The next UI should be designed from a blank slate around that proven lifecycle
+rather than preserving the old tab-selection/Initialize-Both interface.
 
 ---
 
