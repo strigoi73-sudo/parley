@@ -80,6 +80,7 @@ class ParleyApp:
         self.root.geometry("1320x840")
         self.root.minsize(1120, 720)
         self.root.configure(bg=BG)
+        self.root.protocol("WM_DELETE_WINDOW", self._on_close)
 
         self.tabs = []
         self.tab_by_label = {}
@@ -103,6 +104,31 @@ class ParleyApp:
         self.root.after(80, self._drain_ui_queue)
         self.root.after(250, self._poll)
         self.refresh_tabs()
+
+    def _on_close(self):
+        active = bool(self.session and self.session.is_alive())
+        if active:
+            if not messagebox.askyesno(
+                "Close Parley",
+                "A relay is still active. Stop it and close Parley?",
+            ):
+                return
+            self.session.stop()
+
+        if self._busy:
+            self._operation_stop.set()
+
+        if active:
+            self._activity("Closing Parley after relay stops")
+            self.root.after(100, self._finish_close_when_safe)
+        else:
+            self.root.destroy()
+
+    def _finish_close_when_safe(self):
+        if self.session and self.session.is_alive():
+            self.root.after(100, self._finish_close_when_safe)
+            return
+        self.root.destroy()
 
     def _build_style(self):
         style = ttk.Style()
