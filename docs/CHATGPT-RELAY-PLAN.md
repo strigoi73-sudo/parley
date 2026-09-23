@@ -556,6 +556,15 @@ Keep a small manual/live test that:
 
 Live tests should be explicit/manual because they interact with real ChatGPT sessions.
 
+### 13.4 Parley test chat protocols
+
+For structured A↔B live tests, use the conversation-local protocol files:
+
+- `PARLEY_TEST_CHAT_A_PROTOCOL.md`
+- `PARLEY_TEST_CHAT_B_PROTOCOL.md`
+
+The protocols are strictly opt-in. Activate them only with their exact standalone initialization commands. They define Chat A/Chat B identity, final-reply markers, reset behavior, shared-session handling where applicable, and writing-style guardrails for extended relay conversations.
+
 ---
 
 ## 14. Development Phases
