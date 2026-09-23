@@ -4,7 +4,7 @@ Common commands:
     parley [--live|--classic] list
     parley chats
     parley app
-    parley relay [tab_a] [tab_b] [--rounds N] [--initialize] [--fresh-chats] [--include-text] [--json]
+    parley relay [tab_a] [tab_b] [--rounds N] [--initialize] [--fresh-chats|--fresh-a|--fresh-b] [--include-text] [--json]
 
 The human-facing `chats`, `app`, and `relay` commands use live mode by default
 unless PARLEY_CONNECTION_MODE or --classic explicitly says otherwise.
@@ -217,6 +217,8 @@ def _parse_relay_args(parts):
     prompt_a = False
     initialize = False
     fresh_chats = False
+    fresh_a = False
+    fresh_b = False
     i = 0
 
     while i < len(parts):
@@ -256,6 +258,18 @@ def _parse_relay_args(parts):
 
         if part == "--fresh-chats":
             fresh_chats = True
+            fresh_a = True
+            fresh_b = True
+            i += 1
+            continue
+
+        if part == "--fresh-a":
+            fresh_a = True
+            i += 1
+            continue
+
+        if part == "--fresh-b":
+            fresh_b = True
             i += 1
             continue
 
@@ -281,6 +295,8 @@ def _parse_relay_args(parts):
         "prompt_a": prompt_a,
         "initialize": initialize,
         "fresh_chats": fresh_chats,
+        "fresh_a": fresh_a,
+        "fresh_b": fresh_b,
     }
 
 
@@ -699,14 +715,24 @@ def _run_interactive_relay(
 def cmd_relay(parts, input_fn=input, input_stream=None):
     options = _parse_relay_args(parts)
 
-    if options["fresh_chats"]:
-        if options["tab_a"] or options["tab_b"]:
-            print("--fresh-chats cannot be combined with tab references.")
-            return 2
-        if not options["initialize"]:
-            print("--fresh-chats requires --initialize.")
-            return 2
+    fresh_a = bool(options.get("fresh_a"))
+    fresh_b = bool(options.get("fresh_b"))
 
+    if (fresh_a or fresh_b) and not options["initialize"]:
+        print("--fresh-a/--fresh-b require --initialize.")
+        return 2
+
+    if fresh_a and options["tab_a"]:
+        print("ChatGPT A cannot use both a tab reference and --fresh-a.")
+        return 2
+    if fresh_b and options["tab_b"]:
+        print("ChatGPT B cannot use both a tab reference and --fresh-b.")
+        return 2
+
+    tab_a = None
+    tab_b = None
+
+    if fresh_a and fresh_b:
         print("Creating fresh ChatGPT A and B tabs...")
         fresh = workflows.create_fresh_chatgpt_pair(
             progress=_print_fresh_chat_progress,
@@ -735,44 +761,86 @@ def cmd_relay(parts, input_fn=input, input_stream=None):
             if options["json_output"]:
                 _print(fresh)
             return 1
-
         tab_a = fresh["A"]
         tab_b = fresh["B"]
         print("Fresh ChatGPT A: %s" % tab_a["id"])
         print("Fresh ChatGPT B: %s" % tab_b["id"])
     else:
         tabs = _chatgpt_tabs()
-
         if isinstance(tabs, dict):
             _print(tabs)
             return 1
 
-        if len(tabs) < 2:
-            print("At least two ChatGPT tabs are required for a relay.")
+        existing_needed = int(not fresh_a) + int(not fresh_b)
+        if len(tabs) < existing_needed:
+            print(
+                "At least %d open ChatGPT tab%s %s required for this relay."
+                % (
+                    existing_needed,
+                    "" if existing_needed == 1 else "s",
+                    "is" if existing_needed == 1 else "are",
+                )
+            )
             _print_chatgpt_tabs(tabs)
             return 1
 
-        tab_a = _resolve_tab_reference(options["tab_a"], tabs)
-        tab_b = _resolve_tab_reference(options["tab_b"], tabs)
+        if not fresh_a:
+            tab_a = _resolve_tab_reference(options["tab_a"], tabs)
+            if options["tab_a"] and tab_a is None:
+                print("Could not resolve ChatGPT A: %s" % options["tab_a"])
+                _print_chatgpt_tabs(tabs)
+                return 1
 
-        if options["tab_a"] and tab_a is None:
-            print("Could not resolve ChatGPT A: %s" % options["tab_a"])
+        if not fresh_b:
+            tab_b = _resolve_tab_reference(options["tab_b"], tabs)
+            if options["tab_b"] and tab_b is None:
+                print("Could not resolve ChatGPT B: %s" % options["tab_b"])
+                _print_chatgpt_tabs(tabs)
+                return 1
+
+        if (
+            (not fresh_a and tab_a is None)
+            or (not fresh_b and tab_b is None)
+        ):
             _print_chatgpt_tabs(tabs)
-            return 1
 
-        if options["tab_b"] and tab_b is None:
-            print("Could not resolve ChatGPT B: %s" % options["tab_b"])
-            _print_chatgpt_tabs(tabs)
-            return 1
-
-        if tab_a is None or tab_b is None:
-            _print_chatgpt_tabs(tabs)
-
-        if tab_a is None:
+        if not fresh_a and tab_a is None:
             tab_a = _select_tab("A", tabs, input_fn=input_fn)
 
-        if tab_b is None:
+        if not fresh_b and tab_b is None:
             tab_b = _select_tab("B", tabs, input_fn=input_fn)
+
+        for label, is_fresh in (("A", fresh_a), ("B", fresh_b)):
+            if not is_fresh:
+                continue
+            print("Creating fresh ChatGPT %s tab..." % label)
+            fresh = workflows.create_fresh_chatgpt_participant(
+                label,
+                progress=_print_fresh_chat_progress,
+            )
+            if not isinstance(fresh, dict) or not fresh.get("ok"):
+                error = (
+                    fresh.get("error")
+                    if isinstance(fresh, dict)
+                    else str(fresh)
+                )
+                stage = (
+                    fresh.get("stage", "create_fresh_chat")
+                    if isinstance(fresh, dict)
+                    else "create_fresh_chat"
+                )
+                print(
+                    "Could not create fresh ChatGPT %s during %s: %s"
+                    % (label, stage, error)
+                )
+                if options["json_output"]:
+                    _print(fresh)
+                return 1
+            if label == "A":
+                tab_a = fresh["tab"]
+            else:
+                tab_b = fresh["tab"]
+            print("Fresh ChatGPT %s: %s" % (label, fresh["tab"]["id"]))
 
     if tab_a["id"] == tab_b["id"]:
         print("ChatGPT A and B must be different tabs.")
