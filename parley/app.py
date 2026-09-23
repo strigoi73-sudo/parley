@@ -11,6 +11,7 @@ import threading
 import time
 import tkinter as tk
 from tkinter import messagebox, simpledialog, ttk
+from urllib.parse import urlparse
 
 from . import core, workflows
 from .relay import RelaySession
@@ -95,6 +96,11 @@ class ParleyApp:
         self._closing = False
         self._tabs = None
         self._mode = "idle"
+        self._participant_tabs = []
+        self._participant_tab_map = {}
+        self._participant_source_vars = {}
+        self._participant_tab_vars = {}
+        self._participant_tab_boxes = {}
 
         self._build_style()
         self._build_ui()
@@ -264,7 +270,9 @@ class ParleyApp:
             font=("Segoe UI", 10),
             justify="left",
             wraplength=760,
-        ).pack(anchor="w", pady=(6, 20))
+        ).pack(anchor="w", pady=(6, 18))
+
+        self._build_participant_setup(content)
 
         tk.Label(
             content,
@@ -354,6 +362,226 @@ class ParleyApp:
             justify="left",
             wraplength=760,
         ).pack(anchor="w", padx=14, pady=(0, 13))
+
+    def _build_participant_setup(self, parent):
+        frame = tk.Frame(
+            parent,
+            bg=PANEL_ALT,
+            highlightthickness=1,
+            highlightbackground=BORDER,
+        )
+        frame.pack(fill="x", pady=(0, 18))
+
+        head = tk.Frame(frame, bg=PANEL_ALT)
+        head.pack(fill="x", padx=14, pady=(12, 8))
+        tk.Label(
+            head,
+            text="Participants",
+            bg=PANEL_ALT,
+            fg=TEXT,
+            font=("Segoe UI Semibold", 10),
+        ).pack(side="left")
+        self.refresh_tabs_button = ttk.Button(
+            head,
+            text="Refresh open tabs",
+            style="Secondary.TButton",
+            command=self._refresh_participant_tabs_async,
+        )
+        self.refresh_tabs_button.pack(side="right")
+
+        for label, color in (("A", A_COLOR), ("B", B_COLOR)):
+            row = tk.Frame(frame, bg=PANEL_ALT)
+            row.pack(fill="x", padx=14, pady=(0, 10))
+            row.grid_columnconfigure(2, weight=1)
+
+            tk.Label(
+                row,
+                text=label,
+                bg=PANEL_ALT,
+                fg=color,
+                font=("Segoe UI Semibold", 11),
+                width=2,
+            ).grid(row=0, column=0, sticky="w", padx=(0, 8))
+
+            source_var = tk.StringVar(value="Fresh chat")
+            source_box = ttk.Combobox(
+                row,
+                textvariable=source_var,
+                values=("Fresh chat", "Existing chat"),
+                state="readonly",
+                width=14,
+            )
+            source_box.grid(row=0, column=1, sticky="w", padx=(0, 8))
+            source_box.bind(
+                "<<ComboboxSelected>>",
+                lambda _event, role=label: self._participant_source_changed(role),
+            )
+
+            tab_var = tk.StringVar(value="")
+            tab_box = ttk.Combobox(
+                row,
+                textvariable=tab_var,
+                values=(),
+                state="disabled",
+            )
+            tab_box.grid(row=0, column=2, sticky="ew")
+
+            self._participant_source_vars[label] = source_var
+            self._participant_tab_vars[label] = tab_var
+            self._participant_tab_boxes[label] = tab_box
+
+        tk.Label(
+            frame,
+            text=(
+                "Each role can use a fresh conversation or any eligible "
+                "ChatGPT tab already open in this Chrome session."
+            ),
+            bg=PANEL_ALT,
+            fg=MUTED,
+            font=("Segoe UI", 8),
+            justify="left",
+        ).pack(anchor="w", padx=14, pady=(0, 12))
+
+    def _participant_source_changed(self, label):
+        source = self._participant_source_vars[label].get()
+        box = self._participant_tab_boxes[label]
+        if source == "Existing chat":
+            box.configure(state="readonly")
+            if not self._participant_tabs:
+                self._refresh_participant_tabs_async()
+        else:
+            box.configure(state="disabled")
+
+    def _eligible_chatgpt_tabs(self, tabs):
+        allowed_hosts = {
+            "chatgpt.com",
+            "www.chatgpt.com",
+            "chat.openai.com",
+        }
+        result = []
+        for tab in tabs or []:
+            try:
+                host = (
+                    urlparse(tab.get("url") or "").hostname or ""
+                ).lower()
+            except ValueError:
+                host = ""
+            if host in allowed_hosts and tab.get("id"):
+                result.append(dict(tab))
+        return result
+
+    def _tab_display_name(self, tab):
+        title = (tab.get("title") or "Untitled ChatGPT").strip()
+        url = tab.get("url") or ""
+        target = tab.get("id") or ""
+        return f"{title}  ·  {url}  ·  {target}"
+
+    def _refresh_participant_tabs_async(self):
+        if hasattr(self, "refresh_tabs_button"):
+            self.refresh_tabs_button.configure(state="disabled")
+
+        def worker():
+            try:
+                tabs = core.list_tabs()
+                if isinstance(tabs, dict):
+                    raise RuntimeError(
+                        tabs.get("error") or str(tabs)
+                    )
+                eligible = self._eligible_chatgpt_tabs(tabs)
+                self._post(
+                    self._participant_tabs_refreshed,
+                    eligible,
+                    None,
+                )
+            except Exception as exc:
+                self._post(
+                    self._participant_tabs_refreshed,
+                    [],
+                    str(exc),
+                )
+
+        threading.Thread(
+            target=worker,
+            name="parley-participant-tabs",
+            daemon=True,
+        ).start()
+
+    def _participant_tabs_refreshed(self, tabs, error):
+        if hasattr(self, "refresh_tabs_button"):
+            self.refresh_tabs_button.configure(state="normal")
+
+        previous = {
+            label: self._participant_tab_vars[label].get()
+            for label in ("A", "B")
+        }
+        self._participant_tabs = list(tabs or [])
+        self._participant_tab_map = {
+            self._tab_display_name(tab): tab
+            for tab in self._participant_tabs
+        }
+        values = tuple(self._participant_tab_map.keys())
+
+        for label in ("A", "B"):
+            box = self._participant_tab_boxes[label]
+            box.configure(values=values)
+            old = previous[label]
+            if old in self._participant_tab_map:
+                self._participant_tab_vars[label].set(old)
+            else:
+                self._participant_tab_vars[label].set("")
+
+        if error:
+            self._diagnostic(
+                f"Could not refresh participant tabs: {error}"
+            )
+        else:
+            self._diagnostic(
+                f"Found {len(self._participant_tabs)} eligible ChatGPT tab(s)"
+            )
+
+    def _participant_specs(self):
+        specs = {}
+        for label in ("A", "B"):
+            source = self._participant_source_vars[label].get()
+            if source == "Fresh chat":
+                specs[label] = {"source": "fresh"}
+                continue
+
+            display = self._participant_tab_vars[label].get()
+            tab = self._participant_tab_map.get(display)
+            if tab is None:
+                return None, (
+                    f"Choose an open ChatGPT tab for participant {label}."
+                )
+            specs[label] = {
+                "source": "existing",
+                "tab": dict(tab),
+            }
+
+        if (
+            specs["A"]["source"] == "existing"
+            and specs["B"]["source"] == "existing"
+            and specs["A"]["tab"]["id"] == specs["B"]["tab"]["id"]
+        ):
+            return None, "Participants A and B must use different tabs."
+
+        return specs, None
+
+    def _set_participant_identity(self, label, tab):
+        target = (
+            self.participant_a_title
+            if label == "A"
+            else self.participant_b_title
+        )
+        title = (tab.get("title") or "").strip()
+        source = tab.get("source")
+        if not title:
+            title = (
+                f"Fresh ChatGPT {label}"
+                if source == "fresh"
+                else f"ChatGPT {label}"
+            )
+        target.configure(text=title)
 
     def _build_startup_panel(self):
         self.startup_panel = self._panel(self.main)
@@ -520,11 +748,17 @@ class ParleyApp:
             font=("Segoe UI Semibold", 12),
         ).pack(anchor="w")
 
-        self.participant_a = self._participant_card(
-            pad, "A", A_COLOR, "Fresh ChatGPT A"
+        (
+            self.participant_a,
+            self.participant_a_title,
+        ) = self._participant_card(
+            pad, "A", A_COLOR, "ChatGPT A"
         )
-        self.participant_b = self._participant_card(
-            pad, "B", B_COLOR, "Fresh ChatGPT B"
+        (
+            self.participant_b,
+            self.participant_b_title,
+        ) = self._participant_card(
+            pad, "B", B_COLOR, "ChatGPT B"
         )
 
         tk.Label(
@@ -635,14 +869,17 @@ class ParleyApp:
             font=("Segoe UI Semibold", 8),
         )
         state.pack(side="right")
-        tk.Label(
+        title_label = tk.Label(
             card,
             text=title,
             bg=PANEL_ALT,
             fg=MUTED,
             font=("Segoe UI", 8),
-        ).pack(anchor="w", padx=11, pady=(0, 10))
-        return state
+            justify="left",
+            wraplength=250,
+        )
+        title_label.pack(anchor="w", padx=11, pady=(0, 10))
+        return state, title_label
 
     def _status_row(self, parent, label, value, last=False):
         row = tk.Frame(parent, bg=PANEL_ALT)
@@ -798,6 +1035,7 @@ class ParleyApp:
                 fg=SUCCESS,
             )
             self._diagnostic("Chrome connection ready")
+            self._refresh_participant_tabs_async()
         else:
             self.connection_label.configure(
                 text="●  Chrome unavailable",
@@ -831,6 +1069,14 @@ class ParleyApp:
             )
             return
 
+        participant_specs, participant_error = self._participant_specs()
+        if participant_error:
+            messagebox.showwarning(
+                "Parley",
+                participant_error,
+            )
+            return
+
         self._operation_stop.clear()
         self._user_stop_requested = False
         self._session_started = time.monotonic()
@@ -848,15 +1094,32 @@ class ParleyApp:
         )
         self._set_mode("startup")
         self.startup_progress.start(12)
-        self._diagnostic("Starting fresh Parley session")
+        summary = ", ".join(
+            f"{label}={participant_specs[label]['source']}"
+            for label in ("A", "B")
+        )
+        self._diagnostic(f"Starting Parley session ({summary})")
+        for label in ("A", "B"):
+            spec = participant_specs[label]
+            if spec["source"] == "fresh":
+                self._set_participant_identity(
+                    label,
+                    {
+                        "title": f"Fresh ChatGPT {label}",
+                        "source": "fresh",
+                    },
+                )
+            else:
+                self._set_participant_identity(label, spec["tab"])
 
         def progress(event):
             self._post(self._startup_progress_event, dict(event))
 
         def worker():
             try:
-                result = workflows.prepare_fresh_parley_session(
+                result = workflows.prepare_parley_session(
                     prompt,
+                    participant_specs,
                     should_stop=self._operation_stop.is_set,
                     progress=progress,
                 )
@@ -882,7 +1145,22 @@ class ParleyApp:
         status = event.get("status")
         label = event.get("label")
 
-        if stage == "fresh_chats":
+        if stage == "participants":
+            text = "Resolving conversation participants…"
+        elif stage == "participant" and label:
+            source = event.get("source")
+            text = (
+                f"Creating fresh Chat {label}…"
+                if source == "fresh"
+                else f"Using selected Chat {label}…"
+            )
+            if status == "complete":
+                self._set_participant(
+                    label,
+                    "Created" if source == "fresh" else "Selected",
+                    SUCCESS,
+                )
+        elif stage == "fresh_chats":
             text = "Creating fresh ChatGPT conversations…"
         elif stage == "focus_emulation" and label:
             text = f"Keeping Chat {label} active in the background…"
@@ -982,6 +1260,8 @@ class ParleyApp:
         self._tabs = {"A": tab_a, "B": tab_b}
         self._diagnostic(f"Chat A target: {tab_a.get('id')}")
         self._diagnostic(f"Chat B target: {tab_b.get('id')}")
+        self._set_participant_identity("A", tab_a)
+        self._set_participant_identity("B", tab_b)
 
         self._append_transcript("H", "Session brief", prompt)
         self._append_transcript(
@@ -1132,6 +1412,7 @@ class ParleyApp:
             transfers="0",
         )
         self._set_mode("idle")
+        self._refresh_participant_tabs_async()
         self.prompt_text.focus_set()
 
     def _poll(self):
