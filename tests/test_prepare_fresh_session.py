@@ -183,5 +183,137 @@ class PrepareFreshParleySessionTests(unittest.TestCase):
         create.assert_not_called()
 
 
+class PrepareMixedParleySessionTests(unittest.TestCase):
+    def _run_case(self, source_a, source_b):
+        existing = {
+            "A": {
+                "id": "EXISTING-A",
+                "title": "Existing A",
+                "url": "https://chatgpt.com/c/existing-a",
+            },
+            "B": {
+                "id": "EXISTING-B",
+                "title": "Existing B",
+                "url": "https://chatgpt.com/c/existing-b",
+            },
+        }
+        specs = {}
+        for label, source in (("A", source_a), ("B", source_b)):
+            if source == "fresh":
+                specs[label] = {"source": "fresh"}
+            else:
+                specs[label] = {
+                    "source": "existing",
+                    "tab": existing[label],
+                }
+
+        created = []
+
+        def create(label, **kwargs):
+            created.append(label)
+            return {
+                "ok": True,
+                "participant": label,
+                "tab": {
+                    "id": "FRESH-" + label,
+                    "title": "Fresh ChatGPT " + label,
+                    "url": "https://chatgpt.com/c/fresh-" + label.lower(),
+                    "source": "fresh",
+                },
+            }
+
+        with mock.patch.object(
+            workflows,
+            "create_fresh_chatgpt_participant",
+            side_effect=create,
+        ), mock.patch.object(
+            workflows,
+            "initialize_parley_pair",
+            return_value={
+                "ok": True,
+                "response_complete": True,
+                "stage": "ready",
+                "participants": {},
+            },
+        ) as initialize, mock.patch.object(
+            workflows,
+            "send_and_wait",
+            return_value={
+                "response_complete": True,
+                "response_text": "A REPLY: Ready.\n\nA REPLY END",
+            },
+        ) as send:
+            result = workflows.prepare_parley_session(
+                "Discuss culture.",
+                specs,
+                should_stop=lambda: False,
+            )
+
+        expected_a = (
+            "FRESH-A" if source_a == "fresh" else "EXISTING-A"
+        )
+        expected_b = (
+            "FRESH-B" if source_b == "fresh" else "EXISTING-B"
+        )
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["A"]["id"], expected_a)
+        self.assertEqual(result["B"]["id"], expected_b)
+        self.assertEqual(
+            created,
+            [
+                label
+                for label, source in (("A", source_a), ("B", source_b))
+                if source == "fresh"
+            ],
+        )
+        initialize.assert_called_once_with(
+            expected_a,
+            expected_b,
+            wait_timeout_ms=None,
+            should_stop=mock.ANY,
+            progress=None,
+        )
+        send.assert_called_once()
+        return result
+
+    def test_all_four_participant_source_combinations(self):
+        for source_a, source_b in (
+            ("existing", "existing"),
+            ("existing", "fresh"),
+            ("fresh", "existing"),
+            ("fresh", "fresh"),
+        ):
+            with self.subTest(A=source_a, B=source_b):
+                result = self._run_case(source_a, source_b)
+                self.assertEqual(
+                    result["sources"],
+                    {"A": source_a, "B": source_b},
+                )
+
+    def test_same_existing_tab_is_rejected_before_protocol_bootstrap(self):
+        tab = {
+            "id": "SAME",
+            "title": "Same tab",
+            "url": "https://chatgpt.com/c/same",
+        }
+        specs = {
+            "A": {"source": "existing", "tab": tab},
+            "B": {"source": "existing", "tab": tab},
+        }
+
+        with mock.patch.object(
+            workflows,
+            "initialize_parley_pair",
+        ) as initialize:
+            result = workflows.prepare_parley_session(
+                "Discuss culture.",
+                specs,
+            )
+
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["error"], "parley_same_tab")
+        initialize.assert_not_called()
+
+
 if __name__ == "__main__":
     unittest.main()
