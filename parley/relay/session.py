@@ -135,6 +135,16 @@ class RelaySession:
         with self._lock:
             return self._exception
 
+    def events(self):
+        """Return a snapshot of relay events for UI/observer catch-up."""
+        with self._lock:
+            return [dict(item) for item in self._events]
+
+    def transfers(self):
+        """Return a snapshot of completed transfers for UI transcripts."""
+        with self._lock:
+            return [dict(item) for item in self._transfers]
+
     def status(self):
         with self._lock:
             result = self._result
