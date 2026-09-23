@@ -191,11 +191,14 @@ or directly:
 python .\parley.py app
 ```
 
-The desktop app uses the production fresh-chat workflow: enter a conversation
-prompt and round count, then **Start Parley**. Parley creates and establishes
-both ChatGPT conversations, provisions and activates the A/B protocols, sends
-the initial prompt to A, and starts the relay. Low-level target IDs and workflow
-events are available from **Diagnostics** rather than occupying the main UI.
+The desktop app lets you choose each participant independently. A and B can each
+use either a **Fresh chat** or an eligible **Existing chat** already open in the
+connected Chrome session, so existing/existing, existing/fresh, fresh/existing,
+and fresh/fresh setups are all supported. Enter a conversation prompt and round
+count, choose the participant sources, then **Start Parley**. Parley creates any
+fresh participants, provisions and activates the A/B protocols, sends the initial
+prompt to A, and starts the relay. Low-level target IDs and workflow events are
+available from **Diagnostics** rather than occupying the main UI.
 
 ### Classic compatibility mode
 
@@ -242,6 +245,25 @@ Or supply either the displayed numbers or exact tab IDs:
 ```powershell
 python .\parley.py relay 1 2 --rounds 3
 ```
+
+Fresh participants can also be selected per role during protocol initialization:
+
+```powershell
+# Fresh A, existing B selected from the open-tab list
+python .\parley.py relay --fresh-a --initialize --rounds 3
+
+# Existing A, fresh B
+python .\parley.py relay --fresh-b --initialize --rounds 3
+
+# Fresh A with a specific existing B target
+python .\parley.py relay EXISTING_B_TAB_ID --fresh-a --initialize --rounds 3
+
+# Both fresh (backward-compatible shorthand)
+python .\parley.py relay --fresh-chats --initialize --rounds 3
+```
+
+The Windows launcher exposes the same mixed setup with `-FreshA`, `-FreshB`,
+and `-FreshChats`.
 
 While the relay runs, enter a command and press Enter:
 
