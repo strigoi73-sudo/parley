@@ -161,9 +161,10 @@ class RelayCLITests(unittest.TestCase):
         )
         session_cls.assert_called_once()
 
-    def test_cmd_relay_rejects_role_reference_with_same_fresh_role(self):
+    def test_cmd_relay_rejects_explicit_a_reference_with_fresh_a(self):
         code = cli.cmd_relay([
             "EXISTING-A",
+            "EXISTING-B",
             "--fresh-a",
             "--initialize",
             "--rounds=1",
