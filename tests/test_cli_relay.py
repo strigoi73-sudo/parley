@@ -682,6 +682,42 @@ class RelaySessionTests(unittest.TestCase):
         self.assertEqual(status["rounds_completed"], 1)
         self.assertEqual(status["transfers_completed"], 2)
 
+    def test_session_exposes_defensive_event_and_transfer_snapshots(self):
+        session = RelaySession(
+            mock.Mock(),
+            "A",
+            "B",
+            2,
+        )
+        session._on_event({
+            "event": "state_changed",
+            "state": "TRANSFER_A_TO_B",
+        })
+        session._on_event({
+            "event": "transfer_completed",
+            "round": 1,
+            "direction": "A->B",
+            "response_text": "B REPLY: hello\n\nB REPLY END",
+        })
+
+        events = session.events()
+        transfers = session.transfers()
+
+        self.assertEqual(events[0]["event"], "state_changed")
+        self.assertEqual(transfers[0]["direction"], "A->B")
+
+        events[0]["event"] = "mutated"
+        transfers[0]["direction"] = "mutated"
+
+        self.assertEqual(
+            session.events()[0]["event"],
+            "state_changed",
+        )
+        self.assertEqual(
+            session.transfers()[0]["direction"],
+            "A->B",
+        )
+
     def test_session_extend_rounds_updates_status(self):
         session = RelaySession(
             mock.Mock(),
