@@ -828,6 +828,14 @@ class ParleyApp:
     def _protocol_finished(self, label, result):
         self._init_pending.discard(label)
 
+        response_text = result.get("response_text") if isinstance(result, dict) else None
+        if response_text:
+            name_var = self.a_name if label == "A" else self.b_name
+            name = name_var.get().strip() or f"Chat {label}"
+            self._append_transcript(
+                label, f"{name} · Initialization", _display_reply(response_text, label),
+            )
+
         if _result_ok(result):
             self.ready[label] = True
             self._set_protocol_status(label, "Ready", SUCCESS)

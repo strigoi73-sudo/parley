@@ -5,10 +5,9 @@ DevToolsActivePort. One browser-level WebSocket is kept for the lifetime of
 the Parley process; flattened Target sessions are attached/detached over that
 single connection.
 
-All browser-socket command/response transactions are serialized. This avoids
-multiple target sessions competing to consume responses from one shared
-WebSocket while still avoiding repeated Chrome remote-debugging approval
-prompts.
+Writes are serialized; one receive loop routes replies to waiting commands.
+A slow target therefore cannot block commands for another target, and callers
+never compete to consume replies from the shared WebSocket.
 """
 
 import atexit
@@ -108,13 +107,15 @@ def live_devtools_endpoint(user_data_dir=None):
 
 
 class LiveBrowserManager:
-    """Own one browser-level CDP WebSocket and serialize all commands."""
+    """Own one browser WebSocket with one reader and independent waiters."""
 
     def __init__(self, endpoint_fn=live_devtools_endpoint):
         self._endpoint_fn = endpoint_fn
         self._lock = threading.RLock()
+        self._work = threading.Condition(self._lock)
         self._ws = None
         self._next_id = 1
+        self._pending = {}
 
     def _connected_locked(self):
         if self._ws is None:
@@ -124,12 +125,19 @@ class LiveBrowserManager:
         except Exception:
             return False
 
-    def _close_locked(self):
+    def _close_locked(self, error="live browser connection closed"):
         ws = self._ws
         self._ws = None
+        for pending in self._pending.values():
+            pending["response"] = {"error": error}
+            pending["done"].set()
+        self._pending.clear()
+        self._work.notify_all()
         if ws is not None:
             try:
-                ws.close()
+                # close() normally reads the close handshake itself. Never
+                # let it compete with our sole reader, even during shutdown.
+                ws.close(timeout=0)
             except Exception:
                 pass
 
@@ -138,11 +146,8 @@ class LiveBrowserManager:
             self._close_locked()
 
     def _ensure_connected_locked(self, timeout=None):
-        if self._connected_locked():
-            try:
-                self._ws.settimeout(timeout)
-            except Exception:
-                self._close_locked()
+        if self._ws is not None and not self._connected_locked():
+            self._close_locked()
 
         if self._ws is None:
             endpoint = self._endpoint_fn()
@@ -151,8 +156,54 @@ class LiveBrowserManager:
                 timeout=timeout,
                 suppress_origin=True,
             )
+            # A socket poll is only an opportunity to observe close/cancel;
+            # it is never a command's failure deadline.
+            self._ws.settimeout(0.25)
+            threading.Thread(
+                target=self._receive,
+                args=(self._ws,),
+                name="parley-cdp-receive",
+                daemon=True,
+            ).start()
 
         return self._ws
+
+    def _receive(self, ws):
+        """The only recv consumer for this socket generation."""
+        while True:
+            with self._work:
+                while self._ws is ws and not self._pending:
+                    self._work.wait()
+                if self._ws is not ws:
+                    return
+            try:
+                response = json.loads(ws.recv())
+                if not isinstance(response, dict):
+                    raise ValueError("malformed CDP response")
+            except websocket.WebSocketTimeoutException:
+                continue
+            except Exception as exc:
+                with self._lock:
+                    if self._ws is ws:
+                        self._close_locked(str(exc))
+                return
+
+            with self._lock:
+                if self._ws is not ws:
+                    return
+                pending = self._pending.get(response.get("id"))
+                if pending is None:
+                    # Events and late replies to stopped/expired commands.
+                    continue
+                if response.get("sessionId") not in (None, pending["session_id"]):
+                    continue
+                if "result" in response:
+                    result = response["result"]
+                else:
+                    result = {"error": response.get("error", "malformed CDP response")}
+                self._pending.pop(response["id"])
+                pending["response"] = result
+                pending["done"].set()
 
     def _new_id_locked(self):
         msg_id = self._next_id
@@ -169,6 +220,9 @@ class LiveBrowserManager:
         should_stop=None,
     ):
         """Send one CDP command and return its result/error payload."""
+        if callable(should_stop) and should_stop():
+            return {"error": "stopped"}
+        pending = {"done": threading.Event(), "session_id": session_id}
         with self._lock:
             try:
                 ws = self._ensure_connected_locked(timeout=timeout)
@@ -182,51 +236,29 @@ class LiveBrowserManager:
                 if session_id:
                     message["sessionId"] = session_id
 
+                self._pending[msg_id] = pending
                 ws.send(json.dumps(message))
-
-                deadline = (
-                    None
-                    if timeout is None
-                    else time.monotonic() + timeout
-                )
-                poll_timeout = 0.25 if callable(should_stop) else timeout
-                ws.settimeout(poll_timeout)
-
-                while deadline is None or time.monotonic() < deadline:
-                    if callable(should_stop) and should_stop():
-                        return {"error": "stopped"}
-
-                    try:
-                        response = json.loads(ws.recv())
-                    except websocket.WebSocketTimeoutException:
-                        if deadline is None:
-                            continue
-                        break
-
-                    if response.get("id") != msg_id:
-                        # Browser/target events are intentionally ignored here.
-                        # Transactions are serialized, so there is no other
-                        # Parley command response that needs routing.
-                        continue
-
-                    if (
-                        session_id
-                        and response.get("sessionId")
-                        not in (None, session_id)
-                    ):
-                        continue
-
-                    if "result" in response:
-                        return response["result"]
-                    if "error" in response:
-                        return {"error": response["error"]}
-                    return {"error": "malformed CDP response"}
-
-                return {"error": "timeout"}
-
+                self._work.notify()
             except Exception as exc:
-                self._close_locked()
+                self._close_locked(str(exc))
                 return {"error": str(exc)}
+
+        deadline = None if timeout is None else time.monotonic() + timeout
+        try:
+            while True:
+                if callable(should_stop) and should_stop():
+                    return {"error": "stopped"}
+                remaining = None if deadline is None else deadline - time.monotonic()
+                if remaining is not None and remaining <= 0:
+                    return {"error": "timeout"}
+                wait = remaining
+                if callable(should_stop):
+                    wait = 0.25 if remaining is None else min(0.25, remaining)
+                if pending["done"].wait(wait):
+                    return pending["response"]
+        finally:
+            with self._lock:
+                self._pending.pop(msg_id, None)
 
     def target_infos(self):
         result = self.command(

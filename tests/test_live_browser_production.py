@@ -1,5 +1,6 @@
 import json
 import os
+import queue
 import tempfile
 import threading
 import time
@@ -20,7 +21,7 @@ from parley.live_browser import (
 class FakeBrowserWebSocket:
     def __init__(self, delay=0.0):
         self.sent = []
-        self.queue = []
+        self.queue = queue.Queue()
         self.timeout = None
         self.closed = False
         self.connected = True
@@ -77,14 +78,15 @@ class FakeBrowserWebSocket:
         }
         if message.get("sessionId"):
             response["sessionId"] = message["sessionId"]
-        self.queue.append(json.dumps(response))
+        self.queue.put(json.dumps(response))
 
     def recv(self):
         if self.delay:
             time.sleep(self.delay)
-        if not self.queue:
-            raise AssertionError("fake websocket receive queue is empty")
-        value = self.queue.pop(0)
+        try:
+            value = self.queue.get(timeout=self.timeout)
+        except queue.Empty:
+            raise websocket.WebSocketTimeoutException()
         with self._lock:
             self.active_transactions -= 1
         return value
@@ -92,7 +94,7 @@ class FakeBrowserWebSocket:
     def settimeout(self, timeout):
         self.timeout = timeout
 
-    def close(self):
+    def close(self, timeout=None):
         self.closed = True
         self.connected = False
 
@@ -125,6 +127,7 @@ class LiveBrowserProductionTests(unittest.TestCase):
         manager = LiveBrowserManager(
             endpoint_fn=lambda: "ws://127.0.0.1:9222/devtools/browser/test"
         )
+        self.addCleanup(manager.close)
 
         with mock.patch(
             "parley.live_browser.websocket.create_connection",
@@ -159,11 +162,12 @@ class LiveBrowserProductionTests(unittest.TestCase):
             ],
         )
 
-    def test_shared_browser_socket_serializes_two_target_sessions(self):
+    def test_shared_browser_socket_routes_two_target_sessions(self):
         fake = FakeBrowserWebSocket(delay=0.03)
         manager = LiveBrowserManager(
             endpoint_fn=lambda: "ws://127.0.0.1:9222/devtools/browser/test"
         )
+        self.addCleanup(manager.close)
 
         with mock.patch(
             "parley.live_browser.websocket.create_connection",
@@ -190,7 +194,10 @@ class LiveBrowserProductionTests(unittest.TestCase):
             t2.join(2)
 
         self.assertEqual(len(results), 2)
-        self.assertEqual(fake.max_active_transactions, 1)
+        self.assertEqual(
+            {result["result"]["value"] for result in results},
+            {"session-a", "session-b"},
+        )
 
     def test_live_command_can_wait_without_deadline_until_stopped(self):
         class NoResponseSocket(FakeBrowserWebSocket):
@@ -198,12 +205,14 @@ class LiveBrowserProductionTests(unittest.TestCase):
                 self.sent.append(json.loads(payload))
 
             def recv(self):
+                time.sleep(0.01)
                 raise websocket.WebSocketTimeoutException()
 
         fake = NoResponseSocket()
         manager = LiveBrowserManager(
             endpoint_fn=lambda: "ws://127.0.0.1:9222/devtools/browser/test"
         )
+        self.addCleanup(manager.close)
         checks = {"count": 0}
 
         def should_stop():
@@ -230,6 +239,7 @@ class LiveBrowserProductionTests(unittest.TestCase):
         manager = LiveBrowserManager(
             endpoint_fn=lambda: "ws://127.0.0.1:9222/devtools/browser/test"
         )
+        self.addCleanup(manager.close)
 
         with mock.patch(
             "parley.live_browser.websocket.create_connection",
@@ -297,7 +307,7 @@ class LiveBrowserProductionTests(unittest.TestCase):
             def send(self, payload):
                 message = json.loads(payload)
                 self.sent.append(message)
-                self.queue.append(json.dumps({
+                self.queue.put(json.dumps({
                     "id": message["id"],
                     "error": {
                         "code": -32000,
@@ -309,6 +319,7 @@ class LiveBrowserProductionTests(unittest.TestCase):
         manager = LiveBrowserManager(
             endpoint_fn=lambda: "ws://127.0.0.1:9222/devtools/browser/test"
         )
+        self.addCleanup(manager.close)
 
         with mock.patch(
             "parley.live_browser.websocket.create_connection",
