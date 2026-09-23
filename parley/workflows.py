@@ -37,6 +37,7 @@ from .relay.engine import (
     TEST_A_REPLY_SUFFIX,
     TEST_B_REPLY_PREFIX,
     TEST_B_REPLY_SUFFIX,
+    RESET_CHAT_COMMAND,
 )
 
 
@@ -1169,6 +1170,163 @@ def initialize_parley_pair(
         "stage": "ready",
         "participants": participants,
     }
+
+
+
+
+def prepare_fresh_parley_session(
+    initial_prompt,
+    *,
+    should_stop=None,
+    progress=None,
+):
+    """Prepare a fresh A/B Parley session through the proven live workflow.
+
+    This is the shared application-level startup boundary:
+    fresh chats -> seeded conversations -> protocol bootstrap -> initial A reply.
+    Presentation layers should call this instead of reimplementing startup.
+    """
+    prompt = str(initial_prompt or "").strip()
+    if not prompt:
+        return {
+            "ok": False,
+            "error": "parley_initial_prompt_required",
+            "stage": "initial_prompt",
+        }
+
+    def emit(stage, status, **extra):
+        if not callable(progress):
+            return
+        event = {"stage": stage, "status": status}
+        event.update(extra)
+        progress(event)
+
+    emit("fresh_chats", "starting")
+    fresh = create_fresh_chatgpt_pair(progress=progress)
+    if not isinstance(fresh, dict) or not fresh.get("ok"):
+        return {
+            "ok": False,
+            "error": (
+                fresh.get("error")
+                if isinstance(fresh, dict)
+                else "fresh_chat_create_failed"
+            ) or "fresh_chat_create_failed",
+            "stage": (
+                fresh.get("stage", "fresh_chats")
+                if isinstance(fresh, dict)
+                else "fresh_chats"
+            ),
+            "participant": (
+                fresh.get("participant")
+                if isinstance(fresh, dict)
+                else None
+            ),
+            "detail": fresh,
+        }
+
+    tab_a = fresh["A"]
+    tab_b = fresh["B"]
+    emit("fresh_chats", "complete")
+
+    if callable(should_stop) and should_stop():
+        return {
+            "ok": False,
+            "error": "chatgpt_wait_stopped",
+            "stage": "fresh_chats",
+            "A": tab_a,
+            "B": tab_b,
+        }
+
+    emit("protocols", "starting")
+    initialized = initialize_parley_pair(
+        tab_a["id"],
+        tab_b["id"],
+        wait_timeout_ms=None,
+        should_stop=should_stop,
+        progress=progress,
+    )
+    if not isinstance(initialized, dict) or not initialized.get("ok"):
+        return {
+            "ok": False,
+            "error": (
+                initialized.get("error")
+                if isinstance(initialized, dict)
+                else "parley_protocol_bootstrap_failed"
+            ) or "parley_protocol_bootstrap_failed",
+            "stage": (
+                initialized.get("stage", "protocols")
+                if isinstance(initialized, dict)
+                else "protocols"
+            ),
+            "participant": (
+                initialized.get("participant")
+                if isinstance(initialized, dict)
+                else None
+            ),
+            "detail": initialized,
+            "A": tab_a,
+            "B": tab_b,
+        }
+
+    emit("protocols", "complete")
+    emit("session_prompt", "starting", label="A")
+    initial = send_and_wait(
+        tab_a["id"],
+        prompt,
+        wait_timeout_ms=None,
+        expected_reply_prefix=TEST_A_REPLY_PREFIX,
+        expected_reply_suffix=TEST_A_REPLY_SUFFIX,
+        should_stop=should_stop,
+    )
+    if (
+        not isinstance(initial, dict)
+        or initial.get("error")
+        or not initial.get("response_complete")
+    ):
+        return {
+            "ok": False,
+            "error": (
+                initial.get("error")
+                if isinstance(initial, dict)
+                else "parley_initial_prompt_failed"
+            ) or "parley_initial_prompt_failed",
+            "stage": "session_prompt",
+            "participant": "A",
+            "detail": initial,
+            "A": tab_a,
+            "B": tab_b,
+        }
+
+    text = (initial.get("response_text") or "").strip()
+    if text == RESET_CHAT_COMMAND:
+        return {
+            "ok": False,
+            "error": "parley_initial_reset_requested",
+            "stage": "session_prompt",
+            "participant": "A",
+            "detail": initial,
+            "A": tab_a,
+            "B": tab_b,
+        }
+
+    emit(
+        "session_prompt",
+        "complete",
+        label="A",
+        response_chars=len(text),
+    )
+    return {
+        "ok": True,
+        "stage": "ready",
+        "A": tab_a,
+        "B": tab_b,
+        "fresh": fresh,
+        "protocols": initialized,
+        "initial_prompt": prompt,
+        "initial_response": initial,
+        "initial_response_text": text,
+    }
+
 
 
 

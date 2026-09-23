@@ -3,9 +3,10 @@
 Common commands:
     parley [--live|--classic] list
     parley chats
+    parley app
     parley relay [tab_a] [tab_b] [--rounds N] [--initialize] [--fresh-chats] [--include-text] [--json]
 
-The human-facing `chats` and `relay` commands use live mode by default
+The human-facing `chats`, `app`, and `relay` commands use live mode by default
 unless PARLEY_CONNECTION_MODE or --classic explicitly says otherwise.
 
 Other commands:
@@ -925,7 +926,7 @@ def main(argv=None):
     if explicit_mode is not None:
         os.environ["PARLEY_CONNECTION_MODE"] = explicit_mode
     elif (
-        cmd in ("chats", "relay")
+        cmd in ("chats", "app", "relay")
         and "PARLEY_CONNECTION_MODE" not in os.environ
     ):
         # The primary relay workflow targets the user's already-running,
@@ -1015,6 +1016,10 @@ def main(argv=None):
 
         elif cmd == "relay":
             return cmd_relay(argv[2:])
+
+        elif cmd == "app":
+            from .app import launch
+            return launch()
 
         elif cmd == "read-dom":
             selector = argv[3] if len(argv) > 3 else None

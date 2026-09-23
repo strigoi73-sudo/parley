@@ -77,7 +77,8 @@ $ python3 parley.py cookies <gemini_tab> gemini.google.com
 - **Reliable streaming detection** — a `MutationObserver` returns the response only once it stops changing, so you never grab a partial answer.
 - **AI-to-AI bridging** — relay a conversation between two tabs (e.g. ChatGPT ↔ Gemini) for N rounds.
 - **Self-healing** — auto-reconnects dropped CDP sockets and recovers Gemini's "stuck send button" state via a targeted reload that preserves history.
-- **Three ways to use it** — the CLI, an [MCP](https://modelcontextprotocol.io) server (Claude Desktop / Cursor / opencode / any MCP client), and a native opencode plugin.
+- **Desktop app** — start a fresh A/B conversation from one prompt, watch startup progress and the live transcript, then pause, extend, finish, or stop cleanly.
+- **Four ways to use it** — desktop app, CLI, an [MCP](https://modelcontextprotocol.io) server, and a native opencode plugin.
 - **Zero heavy deps** — one small dependency (`websocket-client`). No Playwright, no Puppeteer, no headless Chrome download.
 
 ### Generic Automation (any website)
@@ -124,6 +125,7 @@ Parley is organized in three layers so the generic engine stays independent of a
 
 ```
 parley/
+├── app.py             Desktop presentation over shared workflows/session APIs.
 ├── core.py            Core CDP engine — connection, DOM, JS eval, input,
 │                      navigation, wait_for, cookies. Knows nothing about AI sites.
 ├── adapters/          Per-site knowledge (selectors, quirks)
@@ -174,6 +176,26 @@ python .\parley.py chats
 
 The `chats` and `relay` commands use live mode by default and should show
 your existing signed-in ChatGPT tabs.
+
+### 3. Launch the desktop app
+
+On Windows:
+
+```powershell
+.\scripts\start-parley.ps1
+```
+
+or directly:
+
+```powershell
+python .\parley.py app
+```
+
+The desktop app uses the production fresh-chat workflow: enter a conversation
+prompt and round count, then **Start Parley**. Parley creates and establishes
+both ChatGPT conversations, provisions and activates the A/B protocols, sends
+the initial prompt to A, and starts the relay. Low-level target IDs and workflow
+events are available from **Diagnostics** rather than occupying the main UI.
 
 ### Classic compatibility mode
 
