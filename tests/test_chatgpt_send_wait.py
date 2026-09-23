@@ -42,6 +42,7 @@ class ChatGPTSendAndWaitTests(unittest.TestCase):
         should_stop=None,
         pre_state_override=None,
         require_user_text_match=True,
+        submission_timeout_ms=10000,
     ):
         ws = FakeSocket()
         clock = FakeClock()
@@ -108,6 +109,7 @@ class ChatGPTSendAndWaitTests(unittest.TestCase):
                 should_stop=should_stop,
                 pre_state_override=pre_state_override,
                 require_user_text_match=require_user_text_match,
+                submission_timeout_ms=submission_timeout_ms,
             )
 
         return result, ws, connect, calls
@@ -213,6 +215,37 @@ class ChatGPTSendAndWaitTests(unittest.TestCase):
         self.assertFalse(result["response_complete"])
         self.assertEqual(result["error"], "chatgpt_wait_stopped")
         self.assertGreaterEqual(checks["count"], 8)
+
+    def test_submission_timeout_is_bounded_independently(self):
+        pre = {
+            "ok": True,
+            "source": "chatgpt-strict",
+            "assistant_count": 0,
+            "user_count": 0,
+            "assistant": None,
+            "user": None,
+            "hasStopButton": False,
+        }
+
+        result, _, _, _ = self.run_transaction(
+            [pre],
+            timeout_ms=None,
+            submission_timeout_ms=500,
+        )
+
+        self.assertFalse(result["response_complete"])
+        self.assertEqual(
+            result["error"],
+            "chatgpt_submission_not_verified",
+        )
+        self.assertGreaterEqual(
+            result["response_duration_ms"],
+            500,
+        )
+        self.assertLess(
+            result["response_duration_ms"],
+            1000,
+        )
 
     def test_pre_attachment_boundary_allows_attachment_rendered_user_text(self):
         pre = {

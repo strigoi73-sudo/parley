@@ -94,6 +94,11 @@ class CoreFileInputTests(unittest.TestCase):
 
         self.assertTrue(result["ok"])
         self.assertEqual(set_file.call_count, 2)
+        for call in set_file.call_args_list:
+            self.assertEqual(
+                call.kwargs["selector"],
+                "input#upload-files",
+            )
         self.assertEqual(evaluate.call_count, 2)
 
 
@@ -193,6 +198,10 @@ class ProtocolBootstrapTests(unittest.TestCase):
         for call in ack_send.call_args_list:
             self.assertFalse(
                 call.kwargs["require_user_text_match"]
+            )
+            self.assertEqual(
+                call.kwargs["submission_timeout_ms"],
+                60000,
             )
             self.assertTrue(
                 call.kwargs["pre_state_override"]["ok"]

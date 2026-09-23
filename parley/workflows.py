@@ -62,7 +62,7 @@ _PARLEY_PROTOCOLS = {
 
 _CHATGPT_REVEAL_FILE_INPUT_JS = r"""
 (() => {
-    const existing = document.querySelector('input[type="file"]');
+    const existing = document.querySelector('input#upload-files');
     if (existing) return {ok: true, action: 'existing-input'};
 
     const visible = (el) => {
@@ -102,7 +102,7 @@ _CHATGPT_REVEAL_FILE_INPUT_JS = r"""
         const text = textFor(el);
         return (
             el.getAttribute('data-testid') === 'composer-plus-btn' ||
-            /^(add|attach|+|more)$/i.test(text) ||
+            /^(add|attach|\+|more)$/i.test(text) ||
             /add.*(photo|file)|attach/i.test(text)
         );
     });
@@ -592,11 +592,13 @@ def _chatgpt_attachment_ready_js(filename):
         return title.includes(name) || aria.includes(name);
     }});
 
-    const selected = Array.from(
-        root.querySelectorAll('input[type="file"]')
-    ).some((input) => Array.from(input.files || []).some(
-        (file) => file.name === name
-    ));
+    const uploadInput = document.querySelector('input#upload-files');
+    const selected = !!(
+        uploadInput &&
+        Array.from(uploadInput.files || []).some(
+            (file) => file.name === name
+        )
+    );
 
     return {{
         ok: exactText || namedAttribute,
@@ -639,6 +641,7 @@ def attach_chatgpt_file(
         set_result = core.set_file_input_files(
             tab_id,
             str(path),
+            selector="input#upload-files",
             timeout=5,
             should_stop=should_stop,
         )
@@ -855,6 +858,7 @@ def initialize_parley_pair(
             should_stop=should_stop,
             pre_state_override=pre_attachment_state,
             require_user_text_match=False,
+            submission_timeout_ms=60000,
         )
         participants[label]["provision"] = ack_result
         if (
@@ -959,6 +963,7 @@ def _chatgpt_send_and_wait(
     should_stop=None,
     pre_state_override=None,
     require_user_text_match=True,
+    submission_timeout_ms=10000,
 ):
     """Strict ChatGPT send/wait transaction using one target connection.
 
@@ -1094,11 +1099,22 @@ def _chatgpt_send_and_wait(
         submitted_state = None
         human_reset_requested = False
         last_submission_state = None
-        submission_deadline = (
+        submission_limit = (
             None
-            if deadline is None
-            else min(deadline, time.monotonic() + 10.0)
+            if submission_timeout_ms is None
+            else time.monotonic() + (
+                submission_timeout_ms / 1000.0
+            )
         )
+        if deadline is None:
+            submission_deadline = submission_limit
+        elif submission_limit is None:
+            submission_deadline = deadline
+        else:
+            submission_deadline = min(
+                deadline,
+                submission_limit,
+            )
         while keep_waiting(submission_deadline):
             state = _chatgpt_state(ws, adapter, should_stop=should_stop)
             last_submission_state = state
