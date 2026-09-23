@@ -103,7 +103,77 @@ class CoreFileInputTests(unittest.TestCase):
 
 
 class FreshChatCreationTests(unittest.TestCase):
-    def test_create_fresh_pair_creates_both_before_waiting(self):
+    def test_initiate_fresh_chat_requires_seed_turn_url_and_idle(self):
+        clock = {"now": 0.0}
+
+        def monotonic():
+            clock["now"] += 0.5
+            return clock["now"]
+
+        states = [
+            {
+                "ok": True,
+                "user": {
+                    "text": "INITIAL PROMPT.  DO NOT REPLY.",
+                },
+                "assistant": None,
+                "hasStopButton": False,
+            },
+            {
+                "ok": True,
+                "user": {
+                    "text": "INITIAL PROMPT.  DO NOT REPLY.",
+                },
+                "assistant": None,
+                "hasStopButton": False,
+            },
+            {
+                "ok": True,
+                "user": {
+                    "text": "INITIAL PROMPT.  DO NOT REPLY.",
+                },
+                "assistant": None,
+                "hasStopButton": False,
+            },
+        ]
+
+        with mock.patch.object(
+            workflows,
+            "send",
+            return_value={"ok": True},
+        ) as send, mock.patch.object(
+            workflows,
+            "read_turn_state",
+            side_effect=states,
+        ), mock.patch.object(
+            workflows.core,
+            "tab_url",
+            return_value="https://chatgpt.com/c/seeded",
+        ), mock.patch.object(
+            workflows.time,
+            "monotonic",
+            side_effect=monotonic,
+        ), mock.patch.object(
+            workflows.time,
+            "sleep",
+        ):
+            result = workflows._initiate_fresh_chatgpt_tab(
+                "fresh-a",
+                timeout_ms=10000,
+                idle_stable_seconds=1.0,
+            )
+
+        self.assertTrue(result["ok"])
+        send.assert_called_once_with(
+            "fresh-a",
+            "INITIAL PROMPT.  DO NOT REPLY.",
+        )
+        self.assertEqual(
+            result["url"],
+            "https://chatgpt.com/c/seeded",
+        )
+
+    def test_create_fresh_pair_seeds_both_before_returning(self):
         operations = []
 
         def create(url):
@@ -119,6 +189,14 @@ class FreshChatCreationTests(unittest.TestCase):
             operations.append(("wait", tab_id, selector, timeout_ms))
             return {"found": True, "waited_ms": 10}
 
+        def initiate(tab_id):
+            operations.append(("initiate", tab_id))
+            return {
+                "ok": True,
+                "url": f"https://chatgpt.com/c/{tab_id}",
+            }
+
+        progress = []
         with mock.patch.object(
             workflows.core,
             "create_tab",
@@ -130,31 +208,36 @@ class FreshChatCreationTests(unittest.TestCase):
         ), mock.patch.object(
             workflows.core,
             "tab_url",
-            side_effect=lambda tab_id: (
-                "https://chatgpt.com/"
-            ),
+            return_value="https://chatgpt.com/",
+        ), mock.patch.object(
+            workflows,
+            "_initiate_fresh_chatgpt_tab",
+            side_effect=initiate,
         ):
             result = workflows.create_fresh_chatgpt_pair(
                 ready_timeout_ms=4321,
+                progress=progress.append,
             )
 
         self.assertTrue(result["ok"])
         self.assertEqual(result["A"]["id"], "fresh-a")
         self.assertEqual(result["B"]["id"], "fresh-b")
         self.assertEqual(
-            operations[:2],
+            operations,
             [
                 ("create", "A", "https://chatgpt.com/"),
                 ("create", "B", "https://chatgpt.com/"),
+                ("wait", "fresh-a", "#prompt-textarea", 4321),
+                ("wait", "fresh-b", "#prompt-textarea", 4321),
+                ("initiate", "fresh-a"),
+                ("initiate", "fresh-b"),
             ],
         )
         self.assertEqual(
-            operations[2:],
-            [
-                ("wait", "fresh-a", "#prompt-textarea", 4321),
-                ("wait", "fresh-b", "#prompt-textarea", 4321),
-            ],
+            [event["status"] for event in progress],
+            ["starting", "complete", "starting", "complete"],
         )
+
 
 
 

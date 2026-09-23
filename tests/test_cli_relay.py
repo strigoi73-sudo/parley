@@ -79,7 +79,9 @@ class RelayCLITests(unittest.TestCase):
 
         self.assertEqual(code, 0)
         existing_tabs.assert_not_called()
-        create_pair.assert_called_once_with()
+        create_pair.assert_called_once_with(
+            progress=cli._print_fresh_chat_progress,
+        )
         initialize.assert_called_once()
         self.assertEqual(
             initialize.call_args.args,

@@ -46,6 +46,9 @@ _PARLEY_ATTACHMENT_TIMEOUT_MS = 30000
 _PARLEY_ATTACHMENT_STABILIZE_SECONDS = 3.0
 _FRESH_CHATGPT_URL = "https://chatgpt.com/"
 _FRESH_CHAT_READY_TIMEOUT_MS = 30000
+_FRESH_CHAT_INITIAL_PROMPT = "INITIAL PROMPT.  DO NOT REPLY."
+_FRESH_CHAT_INIT_TIMEOUT_MS = 30000
+_FRESH_CHAT_IDLE_STABLE_SECONDS = 1.0
 _PARLEY_PROTOCOLS = {
     "A": {
         "filename": "PARLEY_TEST_CHAT_A_PROTOCOL.md",
@@ -743,10 +746,87 @@ def _parley_protocol_active(tab_id, spec):
 
 
 
+
+def _initiate_fresh_chatgpt_tab(
+    tab_id,
+    *,
+    prompt=_FRESH_CHAT_INITIAL_PROMPT,
+    timeout_ms=_FRESH_CHAT_INIT_TIMEOUT_MS,
+    idle_stable_seconds=_FRESH_CHAT_IDLE_STABLE_SECONDS,
+):
+    """Submit the seed prompt and wait for a stable /c/ conversation."""
+    send_result = send(tab_id, prompt)
+    if not isinstance(send_result, dict) or send_result.get("error"):
+        return {
+            "ok": False,
+            "error": (
+                send_result.get("error")
+                if isinstance(send_result, dict)
+                else "fresh_chat_initial_send_failed"
+            ) or "fresh_chat_initial_send_failed",
+            "stage": "send_initial_prompt",
+            "detail": send_result,
+        }
+
+    started = time.monotonic()
+    deadline = started + (timeout_ms / 1000.0)
+    stable_since = None
+    last_state = None
+    last_url = ""
+
+    while time.monotonic() < deadline:
+        state = read_turn_state(tab_id)
+        last_state = state
+        last_url = core.tab_url(tab_id)
+
+        if isinstance(state, dict) and state.get("ok"):
+            user = state.get("user") or {}
+            assistant = state.get("assistant") or {}
+            user_matches = (
+                _normalize_chatgpt_text(user.get("text"))
+                == _normalize_chatgpt_text(prompt)
+            )
+            conversation_url = "/c/" in str(last_url or "")
+            idle = not state.get("hasStopButton") and not assistant.get(
+                "hasStreaming"
+            )
+
+            if user_matches and conversation_url and idle:
+                if stable_since is None:
+                    stable_since = time.monotonic()
+                elif (
+                    time.monotonic() - stable_since
+                    >= idle_stable_seconds
+                ):
+                    return {
+                        "ok": True,
+                        "tab_id": tab_id,
+                        "url": last_url,
+                        "prompt": prompt,
+                        "duration_ms": int(
+                            (time.monotonic() - started) * 1000
+                        ),
+                    }
+            else:
+                stable_since = None
+
+        time.sleep(0.1)
+
+    return {
+        "ok": False,
+        "error": "fresh_chat_initialization_timeout",
+        "stage": "verify_initial_prompt",
+        "tab_id": tab_id,
+        "url": last_url,
+        "detail": last_state,
+    }
+
+
 def create_fresh_chatgpt_pair(
     ready_timeout_ms=_FRESH_CHAT_READY_TIMEOUT_MS,
+    progress=None,
 ):
-    """Create two clean ChatGPT tabs and wait for both composers."""
+    """Create, seed, and stabilize two clean ChatGPT conversations."""
     created = {}
 
     for label in ("A", "B"):
@@ -795,6 +875,43 @@ def create_fresh_chatgpt_pair(
         current_url = core.tab_url(tab["id"])
         if current_url:
             tab["url"] = current_url
+
+    for label in ("A", "B"):
+        tab = created[label]
+        if callable(progress):
+            progress({
+                "label": label,
+                "stage": "initial_prompt",
+                "status": "starting",
+                "prompt": _FRESH_CHAT_INITIAL_PROMPT,
+            })
+
+        initiated = _initiate_fresh_chatgpt_tab(tab["id"])
+        tab["initialization"] = initiated
+        if not initiated.get("ok"):
+            return {
+                "ok": False,
+                "error": initiated.get(
+                    "error",
+                    "fresh_chat_initialization_failed",
+                ),
+                "stage": initiated.get(
+                    "stage",
+                    "verify_initial_prompt",
+                ),
+                "participant": label,
+                "detail": initiated,
+                "created": created,
+            }
+
+        tab["url"] = initiated.get("url") or tab["url"]
+        if callable(progress):
+            progress({
+                "label": label,
+                "stage": "initial_prompt",
+                "status": "complete",
+                "url": tab["url"],
+            })
 
     return {
         "ok": True,

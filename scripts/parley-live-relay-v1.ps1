@@ -28,7 +28,11 @@ if ($FreshChats) {
 Write-Host ""
 Write-Host "Parley will provision and verify each chat's protocol file before activation." -ForegroundColor Yellow
 Write-Host "Startup is barriered: A file/ACK, B file/ACK, then A activation, then B activation." -ForegroundColor Yellow
-Write-Host "Choose a round limit after selecting ChatGPT A and B." -ForegroundColor Yellow
+if ($FreshChats) {
+    Write-Host "Fresh ChatGPT A and B will be initiated automatically before protocol upload." -ForegroundColor Yellow
+} else {
+    Write-Host "Choose a round limit after selecting ChatGPT A and B." -ForegroundColor Yellow
+}
 Write-Host "Paste the initial prompt for ChatGPT A. Multiline prompts are supported." -ForegroundColor Yellow
 Write-Host "When finished, enter END PROMPT on a line by itself." -ForegroundColor Yellow
 Write-Host "While the relay is running, use s/status to inspect state and q/stop to end it." -ForegroundColor Yellow

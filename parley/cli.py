@@ -285,6 +285,20 @@ def _parse_relay_args(parts):
 
 
 
+
+def _print_fresh_chat_progress(event):
+    label = event.get("label", "?")
+    stage = event.get("stage")
+    status = event.get("status")
+
+    if stage == "initial_prompt" and status == "starting":
+        print(
+            f"Chat {label}: submitting INITIAL PROMPT.  DO NOT REPLY."
+        )
+    elif stage == "initial_prompt" and status == "complete":
+        print(f"Chat {label}: conversation established.")
+
+
 def _print_protocol_progress(event):
     label = event.get("label", "?")
     stage = event.get("stage")
@@ -677,7 +691,9 @@ def cmd_relay(parts, input_fn=input, input_stream=None):
             return 2
 
         print("Creating fresh ChatGPT A and B tabs...")
-        fresh = workflows.create_fresh_chatgpt_pair()
+        fresh = workflows.create_fresh_chatgpt_pair(
+            progress=_print_fresh_chat_progress,
+        )
         if not isinstance(fresh, dict) or not fresh.get("ok"):
             error = (
                 fresh.get("error")
