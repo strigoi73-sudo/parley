@@ -21,10 +21,6 @@ from .relay.engine import (
     TEST_B_REPLY_SUFFIX,
 )
 
-
-ACTIVATE_A = "INITIALIZE PARLEY TEST CHAT A"
-ACTIVATE_B = "INITIALIZE PARLEY TEST CHAT B"
-
 BG = "#0b1020"
 PANEL = "#111827"
 PANEL_ALT = "#151f32"
@@ -779,102 +775,139 @@ class ParleyApp:
         self.ready = {"A": False, "B": False}
         self._init_pending = {"A", "B"}
         self._init_errors = {}
-        self._set_protocol_status("A", "Initializing…", WARN)
-        self._set_protocol_status("B", "Initializing…", WARN)
+        self._set_protocol_status("A", "Queued", MUTED)
+        self._set_protocol_status("B", "Queued", MUTED)
         self._set_busy(True)
         self._operation_stop.clear()
-        self._activity("Initializing Chat A and Chat B protocols in parallel")
-
-        specs = (
-            (
-                "A",
-                tab_a["id"],
-                ACTIVATE_A,
-                TEST_A_REPLY_PREFIX,
-                TEST_A_REPLY_SUFFIX,
-            ),
-            (
-                "B",
-                tab_b["id"],
-                ACTIVATE_B,
-                TEST_B_REPLY_PREFIX,
-                TEST_B_REPLY_SUFFIX,
-            ),
+        self._activity(
+            "Provisioning and initializing Chat A and Chat B with serial barriers"
         )
 
-        for label, tab_id, activation, prefix, suffix in specs:
-            def worker(
-                label=label,
-                tab_id=tab_id,
-                activation=activation,
-                prefix=prefix,
-                suffix=suffix,
-            ):
-                try:
-                    result = workflows.send_and_wait(
-                        tab_id,
-                        activation,
-                        wait_timeout_ms=None,
-                        expected_reply_prefix=prefix,
-                        expected_reply_suffix=suffix,
-                        should_stop=self._operation_stop.is_set,
-                    )
-                except Exception as exc:
-                    result = {"error": str(exc), "response_complete": False}
-                self._post(self._protocol_finished, label, result)
+        def progress(event):
+            self._post(self._protocol_progress, event)
 
-            self._run_worker(worker, f"parley-gui-init-{label.lower()}")
+        def worker():
+            try:
+                result = workflows.initialize_parley_pair(
+                    tab_a["id"],
+                    tab_b["id"],
+                    should_stop=self._operation_stop.is_set,
+                    progress=progress,
+                )
+            except Exception as exc:
+                result = {
+                    "ok": False,
+                    "error": str(exc),
+                    "response_complete": False,
+                    "stage": "bootstrap",
+                }
+            self._post(self._protocol_pair_finished, result)
 
-    def _protocol_finished(self, label, result):
-        self._init_pending.discard(label)
+        self._run_worker(worker, "parley-gui-initialize")
 
-        response_text = result.get("response_text") if isinstance(result, dict) else None
-        if response_text:
-            name_var = self.a_name if label == "A" else self.b_name
-            name = name_var.get().strip() or f"Chat {label}"
-            self._append_transcript(
-                label, f"{name} · Initialization", _display_reply(response_text, label),
+    def _protocol_progress(self, event):
+        label = event.get("label")
+        if label not in ("A", "B"):
+            return
+
+        stage = event.get("stage")
+        status = event.get("status")
+
+        if stage == "preflight" and status == "already_active":
+            self._set_protocol_status(label, "Ready", SUCCESS)
+            self._activity(f"Chat {label} protocol already active")
+        elif stage == "provision":
+            self._set_protocol_status(label, "Uploading protocol…", WARN)
+            self._activity(
+                f"Chat {label} uploading {event.get('filename', 'protocol file')}"
             )
-
-        if _result_ok(result):
-            self.ready[label] = True
+        elif stage == "protocol_ack":
+            self._set_protocol_status(label, "Verifying protocol…", WARN)
+            self._activity(f"Chat {label} waiting for protocol receipt")
+        elif stage == "protocol_ready":
+            self._set_protocol_status(label, "Protocol ready", SUCCESS)
+            self._activity(f"Chat {label} protocol file verified")
+        elif stage == "activation":
+            self._set_protocol_status(label, "Initializing…", WARN)
+            self._activity(f"Chat {label} activating protocol")
+        elif stage == "ready":
+            self._init_pending.discard(label)
             self._set_protocol_status(label, "Ready", SUCCESS)
             self._activity(f"Chat {label} protocol ready")
-        else:
-            self.ready[label] = False
-            error = result.get("error") if isinstance(result, dict) else str(result)
-            if error == "chatgpt_wait_stopped":
-                self._set_protocol_status(label, "Not initialized", MUTED)
-                self._activity(f"Chat {label} initialization cancelled")
-            else:
-                self._set_protocol_status(label, "Failed", DANGER)
-                self._init_errors[label] = error or str(result)
-                self._activity(
-                    f"Chat {label} initialization failed: "
-                    f"{self._init_errors[label]}"
-                )
 
-        if self._init_pending:
+        self._update_controls()
+
+    def _protocol_pair_finished(self, result):
+        participants = (
+            result.get("participants", {})
+            if isinstance(result, dict)
+            else {}
+        )
+
+        for label in ("A", "B"):
+            participant = participants.get(label, {})
+            activation = participant.get("activation")
+            if isinstance(activation, dict):
+                response_text = activation.get("response_text")
+                if response_text:
+                    name_var = self.a_name if label == "A" else self.b_name
+                    name = name_var.get().strip() or f"Chat {label}"
+                    self._append_transcript(
+                        label,
+                        f"{name} · Initialization",
+                        _display_reply(response_text, label),
+                    )
+
+            self.ready[label] = bool(
+                participant.get("already_active")
+                or (
+                    isinstance(activation, dict)
+                    and not activation.get("error")
+                    and activation.get("response_complete")
+                )
+            )
+
+        self._init_pending.clear()
+        self._set_busy(False)
+
+        if isinstance(result, dict) and result.get("ok"):
+            self.ready = {"A": True, "B": True}
+            self._set_protocol_status("A", "Ready", SUCCESS)
+            self._set_protocol_status("B", "Ready", SUCCESS)
+            self._activity("Both protocols provisioned and verified")
+            self._set_phase("Ready")
             self._update_controls()
             return
 
-        self._set_busy(False)
+        error = result.get("error") if isinstance(result, dict) else str(result)
+        participant = (
+            result.get("participant")
+            if isinstance(result, dict)
+            else None
+        )
+        stage = result.get("stage") if isinstance(result, dict) else "bootstrap"
 
-        if self.ready["A"] and self.ready["B"]:
-            self._activity("Both protocols verified")
-            self._set_phase("Ready")
-            return
-
-        if self._init_errors:
-            detail = "\n\n".join(
-                f"Chat {label}: {error}"
-                for label, error in sorted(self._init_errors.items())
+        if error == "chatgpt_wait_stopped":
+            for label in ("A", "B"):
+                if not self.ready[label]:
+                    self._set_protocol_status(label, "Not initialized", MUTED)
+            self._activity("Protocol initialization cancelled")
+        else:
+            if participant in ("A", "B"):
+                self._set_protocol_status(participant, "Failed", DANGER)
+                self._init_errors[participant] = error or "unknown error"
+            self._activity(
+                f"Protocol initialization failed at {stage}: {error}"
             )
             messagebox.showerror(
                 "Protocol initialization failed",
-                "One or more chats did not complete protocol "
-                f"initialization.\n\n{detail}",
+                (
+                    f"Chat {participant or '?'} failed during {stage}.\n\n"
+                    f"{error or 'Unknown error'}"
+                ),
             )
+
+        self._update_controls()
 
     def _rounds(self):
         try:

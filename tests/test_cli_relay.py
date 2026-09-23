@@ -24,6 +24,7 @@ class RelayCLITests(unittest.TestCase):
         self.assertTrue(options["include_text"])
         self.assertTrue(options["json_output"])
         self.assertTrue(options["prompt_a"])
+        self.assertFalse(options["initialize"])
 
     def test_resolve_tab_by_number_or_id(self):
         tabs = [
@@ -326,6 +327,49 @@ class RelayCLITests(unittest.TestCase):
             input_stream=None,
             output_json=False,
         )
+
+    def test_cmd_relay_initialize_bootstraps_before_session(self):
+        tabs = [
+            {
+                "id": "TAB-A",
+                "title": "Chat A",
+                "url": "https://chatgpt.com/c/a",
+            },
+            {
+                "id": "TAB-B",
+                "title": "Chat B",
+                "url": "https://chatgpt.com/c/b",
+            },
+        ]
+
+        with mock.patch.object(
+            cli,
+            "_chatgpt_tabs",
+            return_value=tabs,
+        ), mock.patch.object(
+            cli.workflows,
+            "initialize_parley_pair",
+            return_value={"ok": True, "participants": {}},
+        ) as initialize, mock.patch.object(
+            cli,
+            "RelaySession",
+        ) as session_cls, mock.patch.object(
+            cli,
+            "_run_interactive_relay",
+            return_value=0,
+        ):
+            code = cli.cmd_relay([
+                "1",
+                "2",
+                "--rounds=1",
+                "--initialize",
+            ])
+
+        self.assertEqual(code, 0)
+        initialize.assert_called_once()
+        self.assertEqual(initialize.call_args.args, ("TAB-A", "TAB-B"))
+        self.assertTrue(callable(initialize.call_args.kwargs["progress"]))
+        session_cls.assert_called_once()
 
     def test_cmd_relay_startup_reset_propagates_to_b(self):
         tabs = [

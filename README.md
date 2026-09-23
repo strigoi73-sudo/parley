@@ -192,9 +192,11 @@ python .\parley.py gui
 ```
 
 The desktop console uses the same live relay engine as the CLI. Select Chat A
-and Chat B, optionally give them friendly display names, click **Initialize Both**
-to send and verify the exact A/B activation commands, enter a multiline session
-prompt, choose the round limit, and click **Start Session**.
+and Chat B, optionally give them friendly display names, and click **Initialize
+Both**. Parley uploads the matching A/B protocol file to each conversation,
+verifies an exact receipt acknowledgment, waits until both files are confirmed,
+then activates Chat A followed by Chat B. Enter a multiline session prompt,
+choose the round limit, and click **Start Session**.
 
 The live transcript displays completed replies without the transport markers,
 while the activity pane and session panel expose relay state, direction, round
@@ -227,6 +229,20 @@ Start an interactive relay by choosing the tabs when prompted:
 
 ```powershell
 python .\parley.py relay --rounds 3
+```
+
+For the full production bootstrap, add `--initialize`. This performs the same
+barriered protocol-file provisioning used by the desktop **Initialize Both**
+action before the relay begins:
+
+```powershell
+python .\parley.py relay --initialize --rounds 3
+```
+
+On Windows, the versioned production launcher wraps that workflow:
+
+```powershell
+.\scripts\parley-live-relay-v1.ps1 -Rounds 3
 ```
 
 Or supply either the displayed numbers or exact tab IDs:

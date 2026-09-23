@@ -16,7 +16,9 @@ AI automation:
 Every function returns plain dicts/values; printing/formatting is the CLI's job.
 """
 
+import json
 import time
+from pathlib import Path
 
 from . import core
 from .core import cdp_connect, cdp_send, cdp_send_with_retry
@@ -30,6 +32,88 @@ from .adapters.js import (
     GEMINI_STUCK_STATE_JS,
     make_mutation_observer_js,
 )
+from .relay.engine import (
+    TEST_A_REPLY_PREFIX,
+    TEST_A_REPLY_SUFFIX,
+    TEST_B_REPLY_PREFIX,
+    TEST_B_REPLY_SUFFIX,
+)
+
+
+_PARLEY_PROTOCOL_DIR = Path(__file__).resolve().parent / "protocols"
+_PARLEY_PROTOCOL_WAIT_TIMEOUT_MS = 120000
+_PARLEY_ATTACHMENT_TIMEOUT_MS = 30000
+_PARLEY_PROTOCOLS = {
+    "A": {
+        "filename": "PARLEY_TEST_CHAT_A_PROTOCOL.md",
+        "ack": "PARLEY PROTOCOL A RECEIVED",
+        "activation": "INITIALIZE PARLEY TEST CHAT A",
+        "reply_prefix": TEST_A_REPLY_PREFIX,
+        "reply_suffix": TEST_A_REPLY_SUFFIX,
+    },
+    "B": {
+        "filename": "PARLEY_TEST_CHAT_B_PROTOCOL.md",
+        "ack": "PARLEY PROTOCOL B RECEIVED",
+        "activation": "INITIALIZE PARLEY TEST CHAT B",
+        "reply_prefix": TEST_B_REPLY_PREFIX,
+        "reply_suffix": TEST_B_REPLY_SUFFIX,
+    },
+}
+
+_CHATGPT_REVEAL_FILE_INPUT_JS = r"""
+(() => {
+    const existing = document.querySelector('input[type="file"]');
+    if (existing) return {ok: true, action: 'existing-input'};
+
+    const visible = (el) => {
+        if (!el) return false;
+        const rect = el.getBoundingClientRect();
+        const style = window.getComputedStyle(el);
+        return (
+            rect.width > 0 &&
+            rect.height > 0 &&
+            style.display !== 'none' &&
+            style.visibility !== 'hidden'
+        );
+    };
+
+    const items = Array.from(
+        document.querySelectorAll('button,[role="button"],[role="menuitem"]')
+    ).filter(visible);
+
+    const textFor = (el) => [
+        el.getAttribute('aria-label') || '',
+        el.getAttribute('title') || '',
+        el.getAttribute('data-testid') || '',
+        el.innerText || '',
+        el.textContent || '',
+    ].join(' ').trim();
+
+    const fileItem = items.find((el) => {
+        const text = textFor(el);
+        return /(upload|attach|add).*(file|photo)|(file|photo).*(upload|attach|add)/i.test(text);
+    });
+    if (fileItem) {
+        fileItem.click();
+        return {ok: true, action: 'clicked-file-control', label: textFor(fileItem)};
+    }
+
+    const plus = items.find((el) => {
+        const text = textFor(el);
+        return (
+            el.getAttribute('data-testid') === 'composer-plus-btn' ||
+            /^(add|attach|+|more)$/i.test(text) ||
+            /add.*(photo|file)|attach/i.test(text)
+        );
+    });
+    if (plus) {
+        plus.click();
+        return {ok: true, action: 'clicked-composer-control', label: textFor(plus)};
+    }
+
+    return {ok: false, error: 'chatgpt_file_control_unavailable'};
+})()
+"""
 
 
 _UNKNOWN_TAB_RESPONSE_JS = """
@@ -448,6 +532,366 @@ def _chatgpt_same_user_turn(expected_state, current_state):
         )
 
     return False
+
+
+
+def _chatgpt_attachment_ready_js(filename):
+    """Return JS that confirms the selected file is represented in the composer."""
+    name = json.dumps(str(filename))
+    return f"""
+(() => {{
+    const name = {name};
+    const composer = document.querySelector('#prompt-textarea');
+    const root = (
+        (composer && composer.closest('form')) ||
+        (composer && composer.parentElement && composer.parentElement.parentElement) ||
+        document.body
+    );
+
+    const exactText = Array.from(root.querySelectorAll('*')).some((el) => {{
+        if (el.children.length) return false;
+        return (el.textContent || '').trim() === name;
+    }});
+
+    const namedAttribute = Array.from(
+        root.querySelectorAll('[title],[aria-label]')
+    ).some((el) => {{
+        const title = el.getAttribute('title') || '';
+        const aria = el.getAttribute('aria-label') || '';
+        return title.includes(name) || aria.includes(name);
+    }});
+
+    const selected = Array.from(
+        root.querySelectorAll('input[type="file"]')
+    ).some((input) => Array.from(input.files || []).some(
+        (file) => file.name === name
+    ));
+
+    return {{
+        ok: exactText || namedAttribute,
+        filename: name,
+        exactText,
+        namedAttribute,
+        selected,
+    }};
+}})()
+"""
+
+
+def attach_chatgpt_file(
+    tab_id,
+    file_path,
+    timeout_ms=_PARLEY_ATTACHMENT_TIMEOUT_MS,
+    should_stop=None,
+):
+    """Attach one local file to the ChatGPT composer and verify its UI chip."""
+    adapter = _adapter_for_tab(tab_id)
+    if adapter is None or adapter.name != "chatgpt":
+        return {"ok": False, "error": "chatgpt_adapter_required"}
+
+    path = Path(file_path).expanduser().resolve()
+    if not path.is_file():
+        return {
+            "ok": False,
+            "error": "attachment_file_missing",
+            "path": str(path),
+        }
+
+    started = time.monotonic()
+    deadline = started + (timeout_ms / 1000.0)
+    last_detail = None
+
+    while time.monotonic() < deadline:
+        if callable(should_stop) and should_stop():
+            return {"ok": False, "error": "chatgpt_wait_stopped"}
+
+        set_result = core.set_file_input_files(
+            tab_id,
+            str(path),
+            timeout=5,
+            should_stop=should_stop,
+        )
+        last_detail = set_result
+        if set_result.get("ok"):
+            break
+        if set_result.get("error") == "stopped":
+            return {"ok": False, "error": "chatgpt_wait_stopped"}
+        if set_result.get("error") != "file_input_not_found":
+            return {
+                "ok": False,
+                "error": set_result.get(
+                    "error",
+                    "chatgpt_file_attachment_failed",
+                ),
+                "stage": "select_file",
+                "detail": set_result,
+            }
+
+        last_detail = core.evaluate(
+            tab_id,
+            _CHATGPT_REVEAL_FILE_INPUT_JS,
+            timeout=5,
+        )
+        time.sleep(0.2)
+    else:
+        return {
+            "ok": False,
+            "error": "chatgpt_file_input_timeout",
+            "stage": "locate_file_input",
+            "detail": last_detail,
+        }
+
+    ready_js = _chatgpt_attachment_ready_js(path.name)
+    while time.monotonic() < deadline:
+        if callable(should_stop) and should_stop():
+            return {"ok": False, "error": "chatgpt_wait_stopped"}
+
+        ready = core.evaluate(tab_id, ready_js, timeout=5)
+        last_detail = ready
+        if isinstance(ready, dict) and ready.get("ok"):
+            return {
+                "ok": True,
+                "path": str(path),
+                "filename": path.name,
+                "duration_ms": int(
+                    (time.monotonic() - started) * 1000
+                ),
+                "evidence": ready,
+            }
+        time.sleep(0.2)
+
+    return {
+        "ok": False,
+        "error": "chatgpt_attachment_ready_timeout",
+        "stage": "verify_attachment",
+        "filename": path.name,
+        "detail": last_detail,
+    }
+
+
+def _parley_protocol_active(tab_id, spec):
+    """Return True if this conversation already contains a marked protocol reply."""
+    prefix = json.dumps(spec["reply_prefix"])
+    suffix = json.dumps(spec["reply_suffix"])
+    expression = f"""
+(() => {{
+    const prefix = {prefix};
+    const suffix = {suffix};
+    const nodes = Array.from(document.querySelectorAll(
+        'article[data-turn="assistant"],[data-message-author-role="assistant"]'
+    ));
+    const seen = nodes.some((node) => {{
+        const text = (node.innerText || node.textContent || '').trim();
+        return text.startsWith(prefix) && text.endsWith(suffix);
+    }});
+    return {{ok: true, seen}};
+}})()
+"""
+    result = core.evaluate(tab_id, expression, timeout=5)
+    return bool(isinstance(result, dict) and result.get("ok") and result.get("seen"))
+
+
+def _emit_protocol_progress(progress, label, stage, status, **extra):
+    if not callable(progress):
+        return
+    event = {"label": label, "stage": stage, "status": status}
+    event.update(extra)
+    progress(event)
+
+
+def initialize_parley_pair(
+    tab_a,
+    tab_b,
+    *,
+    wait_timeout_ms=_PARLEY_PROTOCOL_WAIT_TIMEOUT_MS,
+    should_stop=None,
+    progress=None,
+):
+    """Provision and activate A/B protocols with explicit serial barriers."""
+    if tab_a == tab_b:
+        return {
+            "ok": False,
+            "error": "parley_same_tab",
+            "stage": "preflight",
+            "response_complete": False,
+        }
+
+    participants = {}
+    ordered = (
+        ("A", tab_a, _PARLEY_PROTOCOLS["A"]),
+        ("B", tab_b, _PARLEY_PROTOCOLS["B"]),
+    )
+
+    for label, tab_id, spec in ordered:
+        validation = _validate_chatgpt_tab(tab_id)
+        if not validation.get("ok"):
+            return {
+                "ok": False,
+                "error": validation.get(
+                    "error",
+                    "parley_tab_preflight_failed",
+                ),
+                "stage": "preflight",
+                "participant": label,
+                "response_complete": False,
+                "detail": validation,
+                "participants": participants,
+            }
+
+        active = _parley_protocol_active(tab_id, spec)
+        participants[label] = {
+            "tab_id": tab_id,
+            "already_active": active,
+        }
+        _emit_protocol_progress(
+            progress,
+            label,
+            "preflight",
+            "already_active" if active else "pending",
+        )
+
+    # Phase 1: A file + ACK, then B file + ACK.
+    for label, tab_id, spec in ordered:
+        if participants[label]["already_active"]:
+            _emit_protocol_progress(
+                progress, label, "protocol_ready", "complete", reused=True
+            )
+            continue
+
+        protocol_path = _PARLEY_PROTOCOL_DIR / spec["filename"]
+        _emit_protocol_progress(
+            progress,
+            label,
+            "provision",
+            "starting",
+            filename=spec["filename"],
+        )
+
+        attachment = attach_chatgpt_file(
+            tab_id,
+            protocol_path,
+            should_stop=should_stop,
+        )
+        participants[label]["attachment"] = attachment
+        if not attachment.get("ok"):
+            return {
+                "ok": False,
+                "error": attachment.get(
+                    "error",
+                    "parley_protocol_attachment_failed",
+                ),
+                "stage": "protocol_attachment",
+                "participant": label,
+                "response_complete": False,
+                "detail": attachment,
+                "participants": participants,
+            }
+
+        ack_prompt = (
+            "Read the attached Parley protocol file. Do not initialize or "
+            "apply the Parley test protocol yet. Reply exactly with the "
+            "following text and nothing else:\n\n"
+            + spec["ack"]
+        )
+        _emit_protocol_progress(
+            progress, label, "protocol_ack", "waiting"
+        )
+        ack_result = send_and_wait(
+            tab_id,
+            ack_prompt,
+            wait_timeout_ms=wait_timeout_ms,
+            should_stop=should_stop,
+        )
+        participants[label]["provision"] = ack_result
+        if (
+            not isinstance(ack_result, dict)
+            or ack_result.get("error")
+            or not ack_result.get("response_complete")
+        ):
+            return {
+                "ok": False,
+                "error": (
+                    ack_result.get("error")
+                    if isinstance(ack_result, dict)
+                    else "parley_protocol_ack_failed"
+                ) or "parley_protocol_ack_failed",
+                "stage": "protocol_ack",
+                "participant": label,
+                "response_complete": False,
+                "detail": ack_result,
+                "participants": participants,
+            }
+
+        observed = (ack_result.get("response_text") or "").strip()
+        if observed != spec["ack"]:
+            return {
+                "ok": False,
+                "error": "parley_protocol_ack_mismatch",
+                "stage": "protocol_ack",
+                "participant": label,
+                "response_complete": False,
+                "expected": spec["ack"],
+                "observed": observed,
+                "participants": participants,
+            }
+
+        _emit_protocol_progress(
+            progress, label, "protocol_ready", "complete"
+        )
+
+    # Global barrier: both protocols are verified before activation begins.
+    for label, tab_id, spec in ordered:
+        if participants[label]["already_active"]:
+            _emit_protocol_progress(
+                progress, label, "ready", "complete", reused=True
+            )
+            continue
+
+        _emit_protocol_progress(
+            progress, label, "activation", "starting"
+        )
+        activation = send_and_wait(
+            tab_id,
+            spec["activation"],
+            wait_timeout_ms=wait_timeout_ms,
+            expected_reply_prefix=spec["reply_prefix"],
+            expected_reply_suffix=spec["reply_suffix"],
+            should_stop=should_stop,
+        )
+        participants[label]["activation"] = activation
+        if (
+            not isinstance(activation, dict)
+            or activation.get("error")
+            or not activation.get("response_complete")
+        ):
+            return {
+                "ok": False,
+                "error": (
+                    activation.get("error")
+                    if isinstance(activation, dict)
+                    else "parley_protocol_activation_failed"
+                ) or "parley_protocol_activation_failed",
+                "stage": "activation",
+                "participant": label,
+                "response_complete": False,
+                "detail": activation,
+                "participants": participants,
+            }
+
+        _emit_protocol_progress(
+            progress,
+            label,
+            "ready",
+            "complete",
+            response_text=activation.get("response_text"),
+        )
+
+    return {
+        "ok": True,
+        "response_complete": True,
+        "stage": "ready",
+        "participants": participants,
+    }
 
 
 def _chatgpt_send_and_wait(

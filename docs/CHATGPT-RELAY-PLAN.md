@@ -703,7 +703,7 @@ Do not prioritize:
 
 ## 16. Immediate Next Step
 
-Phase 1 production live-browser integration is implemented and the local transport milestone passed. The first live relay attempt proved A → B submission but exposed current ChatGPT replacing a transient `Thinking` assistant turn with the final answer under a new turn identity; that assistant-candidate replacement fix passed local verification. The second live attempt then showed ChatGPT transiently changing the rendered user-turn count from 3 to 2 while B was generating. The strict state now exposes the latest explicit user turn, and transaction tracking follows that submitted user turn by identity/text while tolerating non-increasing count/DOM-ID churn for the same normalized message. A genuinely different user message still fails closed. Re-run `scripts/verify-live-browser-production.ps1`, then rerun `scripts/smoke-live-relay.ps1`.
+Phase 1 production live-browser integration is implemented and the local transport milestone passed. The first live relay attempt proved A → B submission but exposed current ChatGPT replacing a transient `Thinking` assistant turn with the final answer under a new turn identity; that assistant-candidate replacement fix passed local verification. The second live attempt then showed ChatGPT transiently changing the rendered user-turn count from 3 to 2 while B was generating. The strict state now exposes the latest explicit user turn, and transaction tracking follows that submitted user turn by identity/text while tolerating non-increasing count/DOM-ID churn for the same normalized message. A genuinely different user message still fails closed. Re-run `scripts/verify-live-browser-production.ps1`, then rerun `scripts/parley-live-relay-v1.ps1`.
 
 ---
 
@@ -715,6 +715,6 @@ If work resumes in a future session, start here:
 2. Treat `main` as the inherited baseline.
 3. Treat `test/upstream-bridge-live` as the preserved empirical baseline showing the original bridge defects.
 4. Do not assume `feature/live-browser-attach` should be merged wholesale; it is an experimental source of proven ideas.
-5. Production live-browser transport verification has passed. Run the first real end-to-end browser relay using `scripts/smoke-live-relay.ps1`. If that succeeds, Phase 1 is complete and the project can proceed to Phase 7.
+5. Production live-browser transport verification has passed. Run the first real end-to-end browser relay using `scripts/parley-live-relay-v1.ps1`. If that succeeds, Phase 1 is complete and the project can proceed to Phase 7.
 6. Before changing architecture, verify whether a newer planning document or merged implementation has replaced this one.
 

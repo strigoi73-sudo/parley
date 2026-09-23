@@ -3,7 +3,7 @@
 Common commands:
     parley [--live|--classic] list
     parley chats
-    parley relay [tab_a] [tab_b] [--rounds N] [--include-text] [--json]
+    parley relay [tab_a] [tab_b] [--rounds N] [--initialize] [--include-text] [--json]
     parley gui
 
 The human-facing `chats`, `relay`, and `gui` commands use live mode by default
@@ -215,6 +215,7 @@ def _parse_relay_args(parts):
     include_text = False
     json_output = False
     prompt_a = False
+    initialize = False
     i = 0
 
     while i < len(parts):
@@ -247,6 +248,11 @@ def _parse_relay_args(parts):
             i += 1
             continue
 
+        if part == "--initialize":
+            initialize = True
+            i += 1
+            continue
+
         if part.startswith("--"):
             raise ValueError("unknown relay option: %s" % part)
 
@@ -267,7 +273,28 @@ def _parse_relay_args(parts):
         "include_text": include_text,
         "json_output": json_output,
         "prompt_a": prompt_a,
+        "initialize": initialize,
     }
+
+
+
+def _print_protocol_progress(event):
+    label = event.get("label", "?")
+    stage = event.get("stage")
+    status = event.get("status")
+
+    if stage == "preflight" and status == "already_active":
+        print(f"Chat {label}: protocol already active.")
+    elif stage == "provision":
+        print(f"Chat {label}: uploading protocol file...")
+    elif stage == "protocol_ack":
+        print(f"Chat {label}: verifying protocol receipt...")
+    elif stage == "protocol_ready":
+        print(f"Chat {label}: protocol file verified.")
+    elif stage == "activation":
+        print(f"Chat {label}: activating protocol...")
+    elif stage == "ready":
+        print(f"Chat {label}: ready.")
 
 
 def _status_line(status):
@@ -664,6 +691,43 @@ def cmd_relay(parts, input_fn=input, input_stream=None):
     if tab_a["id"] == tab_b["id"]:
         print("ChatGPT A and B must be different tabs.")
         return 1
+
+    if options["initialize"]:
+        print()
+        print("Provisioning and initializing Parley protocols...")
+        init_result = workflows.initialize_parley_pair(
+            tab_a["id"],
+            tab_b["id"],
+            progress=_print_protocol_progress,
+        )
+        if (
+            not isinstance(init_result, dict)
+            or not init_result.get("ok")
+        ):
+            error = (
+                init_result.get("error")
+                if isinstance(init_result, dict)
+                else str(init_result)
+            )
+            stage = (
+                init_result.get("stage", "bootstrap")
+                if isinstance(init_result, dict)
+                else "bootstrap"
+            )
+            participant = (
+                init_result.get("participant")
+                if isinstance(init_result, dict)
+                else None
+            )
+            print(
+                "Protocol initialization failed"
+                + (f" for Chat {participant}" if participant else "")
+                + f" during {stage}: {error}"
+            )
+            if options["json_output"]:
+                _print(init_result)
+            return 1
+        print("Parley protocol bootstrap complete.")
 
     if options["rounds"] is None:
         options["rounds"] = _select_rounds(input_fn=input_fn)

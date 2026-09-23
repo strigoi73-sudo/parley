@@ -19,6 +19,7 @@ Build site-specific behaviour on top of this in `parley.adapters` and
 import json
 import os
 import time
+from pathlib import Path
 import urllib.request
 import urllib.error
 
@@ -301,6 +302,98 @@ def evaluate(tab_id, js, await_promise=False, timeout=10, ws=None):
                 ws.close()
             except Exception:
                 pass
+
+
+
+def set_file_input_files(
+    tab_id,
+    file_path,
+    selector='input[type="file"]',
+    timeout=10,
+    should_stop=None,
+):
+    """Set a local file on a page file-input element through CDP.
+
+    This is site-agnostic. The caller is responsible for making the intended
+    file input exist before calling this function.
+    """
+    path = Path(file_path).expanduser().resolve()
+    if not path.is_file():
+        return {
+            "ok": False,
+            "error": "attachment_file_missing",
+            "path": str(path),
+        }
+
+    ws = cdp_connect(tab_id, timeout=timeout)
+    if not ws:
+        return {"ok": False, "error": "cannot connect to tab"}
+
+    try:
+        document = cdp_send_with_retry(
+            ws,
+            "DOM.getDocument",
+            {"depth": -1, "pierce": True},
+            timeout=timeout,
+            tab_id=tab_id,
+            should_stop=should_stop,
+        )
+        if document.get("error") == "stopped":
+            return {"ok": False, "error": "stopped"}
+        root_id = (document.get("root") or {}).get("nodeId")
+        if not root_id:
+            return {
+                "ok": False,
+                "error": "dom_document_unavailable",
+                "detail": document,
+            }
+
+        query = cdp_send_with_retry(
+            ws,
+            "DOM.querySelector",
+            {"nodeId": root_id, "selector": selector},
+            timeout=timeout,
+            tab_id=tab_id,
+            should_stop=should_stop,
+        )
+        if query.get("error") == "stopped":
+            return {"ok": False, "error": "stopped"}
+        node_id = query.get("nodeId")
+        if not node_id:
+            return {
+                "ok": False,
+                "error": "file_input_not_found",
+                "selector": selector,
+            }
+
+        result = cdp_send_with_retry(
+            ws,
+            "DOM.setFileInputFiles",
+            {"files": [str(path)], "nodeId": node_id},
+            timeout=timeout,
+            tab_id=tab_id,
+            should_stop=should_stop,
+        )
+        if result.get("error") == "stopped":
+            return {"ok": False, "error": "stopped"}
+        if result.get("error"):
+            return {
+                "ok": False,
+                "error": "set_file_input_files_failed",
+                "detail": result,
+            }
+
+        return {
+            "ok": True,
+            "path": str(path),
+            "filename": path.name,
+            "selector": selector,
+        }
+    finally:
+        try:
+            ws.close()
+        except Exception:
+            pass
 
 
 def _js_str(s):
