@@ -821,6 +821,13 @@ class ParleyApp:
             self._activity(
                 f"Chat {label} uploading {event.get('filename', 'protocol file')}"
             )
+        elif stage == "attachment_stabilizing":
+            seconds = event.get("seconds", 0)
+            self._set_protocol_status(label, "Waiting for upload…", WARN)
+            self._activity(
+                f"Chat {label} allowing attachment to finish uploading "
+                f"({seconds:g}s minimum)"
+            )
         elif stage == "protocol_ack":
             self._set_protocol_status(label, "Verifying protocol…", WARN)
             self._activity(f"Chat {label} waiting for protocol receipt")

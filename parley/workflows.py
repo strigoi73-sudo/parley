@@ -43,6 +43,7 @@ from .relay.engine import (
 _PARLEY_PROTOCOL_DIR = Path(__file__).resolve().parent / "protocols"
 _PARLEY_PROTOCOL_WAIT_TIMEOUT_MS = 120000
 _PARLEY_ATTACHMENT_TIMEOUT_MS = 30000
+_PARLEY_ATTACHMENT_STABILIZE_SECONDS = 3.0
 _PARLEY_PROTOCOLS = {
     "A": {
         "filename": "PARLEY_TEST_CHAT_A_PROTOCOL.md",
@@ -703,6 +704,20 @@ def attach_chatgpt_file(
     }
 
 
+
+def _wait_protocol_attachment_stable(
+    should_stop=None,
+    seconds=_PARLEY_ATTACHMENT_STABILIZE_SECONDS,
+):
+    """Hold a short interruptible barrier after ChatGPT renders an attachment."""
+    deadline = time.monotonic() + max(0.0, float(seconds))
+    while time.monotonic() < deadline:
+        if callable(should_stop) and should_stop():
+            return False
+        time.sleep(min(0.1, max(0.0, deadline - time.monotonic())))
+    return not (callable(should_stop) and should_stop())
+
+
 def _parley_protocol_active(tab_id, spec):
     """Return True if this conversation already contains a marked protocol reply."""
     prefix = json.dumps(spec["reply_prefix"])
@@ -838,6 +853,25 @@ def initialize_parley_pair(
                 "participant": label,
                 "response_complete": False,
                 "detail": attachment,
+                "participants": participants,
+            }
+
+        _emit_protocol_progress(
+            progress,
+            label,
+            "attachment_stabilizing",
+            "waiting",
+            seconds=_PARLEY_ATTACHMENT_STABILIZE_SECONDS,
+        )
+        if not _wait_protocol_attachment_stable(
+            should_stop=should_stop,
+        ):
+            return {
+                "ok": False,
+                "error": "chatgpt_wait_stopped",
+                "stage": "attachment_stabilizing",
+                "participant": label,
+                "response_complete": False,
                 "participants": participants,
             }
 

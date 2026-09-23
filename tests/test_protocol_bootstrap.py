@@ -102,6 +102,27 @@ class CoreFileInputTests(unittest.TestCase):
         self.assertEqual(evaluate.call_count, 2)
 
 
+class AttachmentStabilizationTests(unittest.TestCase):
+    def test_stabilization_wait_is_interruptible(self):
+        stop = mock.Mock(side_effect=[False, True])
+        with mock.patch.object(
+            workflows.time,
+            "monotonic",
+            side_effect=[0.0, 0.0],
+        ), mock.patch.object(
+            workflows.time,
+            "sleep",
+        ):
+            result = workflows._wait_protocol_attachment_stable(
+                should_stop=stop,
+                seconds=3.0,
+            )
+
+        self.assertFalse(result)
+
+
+
+
 class ProtocolBootstrapTests(unittest.TestCase):
     def setUp(self):
         self.validation = mock.patch.object(
@@ -167,6 +188,13 @@ class ProtocolBootstrapTests(unittest.TestCase):
             side_effect=attach,
         ), mock.patch.object(
             workflows,
+            "_wait_protocol_attachment_stable",
+            side_effect=lambda **kwargs: (
+                operations.append(("stabilize", None))
+                or True
+            ),
+        ) as stabilize, mock.patch.object(
+            workflows,
             "_chatgpt_send_and_wait",
             side_effect=send,
         ) as ack_send, mock.patch.object(
@@ -186,13 +214,16 @@ class ProtocolBootstrapTests(unittest.TestCase):
             operations,
             [
                 ("attach", "A"),
+                ("stabilize", None),
                 ("ack", "A"),
                 ("attach", "B"),
+                ("stabilize", None),
                 ("ack", "B"),
                 ("activation", "A"),
                 ("activation", "B"),
             ],
         )
+        self.assertEqual(stabilize.call_count, 2)
         self.assertEqual(ack_send.call_count, 2)
         self.assertEqual(activation_send.call_count, 2)
         for call in ack_send.call_args_list:
@@ -239,6 +270,9 @@ class ProtocolBootstrapTests(unittest.TestCase):
             },
         ) as attach, mock.patch.object(
             workflows,
+            "_wait_protocol_attachment_stable",
+        ) as stabilize, mock.patch.object(
+            workflows,
             "send_and_wait",
         ) as send_wait:
             result = workflows.initialize_parley_pair("A", "B")
@@ -247,6 +281,7 @@ class ProtocolBootstrapTests(unittest.TestCase):
         self.assertEqual(result["participant"], "A")
         self.assertEqual(result["stage"], "protocol_attachment")
         attach.assert_called_once()
+        stabilize.assert_not_called()
         send_wait.assert_not_called()
 
     def test_existing_active_chat_is_not_reprovisioned(self):
@@ -281,6 +316,10 @@ class ProtocolBootstrapTests(unittest.TestCase):
             return_value={"ok": True},
         ) as attach, mock.patch.object(
             workflows,
+            "_wait_protocol_attachment_stable",
+            return_value=True,
+        ) as stabilize, mock.patch.object(
+            workflows,
             "_chatgpt_send_and_wait",
             side_effect=send,
         ) as ack_send, mock.patch.object(
@@ -294,6 +333,7 @@ class ProtocolBootstrapTests(unittest.TestCase):
         self.assertTrue(result["participants"]["A"]["already_active"])
         attach.assert_called_once()
         self.assertEqual(attach.call_args.args[0], "B")
+        stabilize.assert_called_once()
         self.assertEqual(ack_send.call_count, 1)
         self.assertTrue(
             ack_send.call_args.args[1].startswith(

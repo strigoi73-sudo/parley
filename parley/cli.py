@@ -287,6 +287,11 @@ def _print_protocol_progress(event):
         print(f"Chat {label}: protocol already active.")
     elif stage == "provision":
         print(f"Chat {label}: uploading protocol file...")
+    elif stage == "attachment_stabilizing":
+        seconds = event.get("seconds", 0)
+        print(
+            f"Chat {label}: waiting {seconds:g}s for protocol upload to settle..."
+        )
     elif stage == "protocol_ack":
         print(f"Chat {label}: verifying protocol receipt...")
     elif stage == "protocol_ready":
