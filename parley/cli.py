@@ -6,7 +6,7 @@ Common commands:
     parley relay [tab_a] [tab_b] [--rounds N] [--include-text] [--json]
     parley gui
 
-The human-facing `chats` and `relay` commands use live mode by default
+The human-facing `chats`, `relay`, and `gui` commands use live mode by default
 unless PARLEY_CONNECTION_MODE or --classic explicitly says otherwise.
 
 Other commands:
