@@ -115,6 +115,16 @@ class RelaySession:
             thread.join(timeout)
         return self.result
 
+    def transfers(self):
+        """Return a snapshot of completed relay transfers."""
+        with self._lock:
+            return [dict(item) for item in self._transfers]
+
+    def events(self):
+        """Return a snapshot of relay events for observers such as the GUI."""
+        with self._lock:
+            return [dict(item) for item in self._events]
+
     @property
     def result(self):
         with self._lock:
