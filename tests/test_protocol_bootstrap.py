@@ -254,7 +254,7 @@ class AttachmentStabilizationTests(unittest.TestCase):
         ):
             result = workflows._wait_protocol_attachment_stable(
                 should_stop=stop,
-                seconds=3.0,
+                seconds=8.0,
             )
 
         self.assertFalse(result)
