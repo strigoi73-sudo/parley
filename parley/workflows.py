@@ -1047,6 +1047,130 @@ def create_fresh_chatgpt_pair(
     }
 
 
+
+def create_fresh_chatgpt_participant(
+    label,
+    ready_timeout_ms=_FRESH_CHAT_READY_TIMEOUT_MS,
+    progress=None,
+):
+    """Create, seed, and stabilize one clean ChatGPT participant."""
+    label = str(label or "").strip().upper()
+    if label not in ("A", "B"):
+        return {
+            "ok": False,
+            "error": "invalid_participant_label",
+            "stage": "create_fresh_chat",
+            "participant": label or None,
+        }
+
+    result = core.create_tab(_FRESH_CHATGPT_URL)
+    if not isinstance(result, dict) or not result.get("ok"):
+        return {
+            "ok": False,
+            "error": (
+                result.get("error")
+                if isinstance(result, dict)
+                else "fresh_chat_create_failed"
+            ) or "fresh_chat_create_failed",
+            "stage": "create_fresh_chat",
+            "participant": label,
+            "detail": result,
+        }
+
+    tab = {
+        "id": result["id"],
+        "title": f"Fresh ChatGPT {label}",
+        "url": result.get("url") or _FRESH_CHATGPT_URL,
+        "source": "fresh",
+    }
+
+    focus = core.set_focus_emulation(
+        tab["id"],
+        True,
+        timeout=None,
+    )
+    if not focus.get("ok"):
+        return {
+            "ok": False,
+            "error": "fresh_chat_focus_emulation_failed",
+            "stage": "focus_emulation",
+            "participant": label,
+            "detail": focus,
+            "tab": tab,
+        }
+    if callable(progress):
+        progress({
+            "label": label,
+            "stage": "focus_emulation",
+            "status": "complete",
+        })
+
+    ready = core.wait_for(
+        tab["id"],
+        "#prompt-textarea",
+        timeout_ms=ready_timeout_ms,
+    )
+    if not isinstance(ready, dict) or not ready.get("found"):
+        return {
+            "ok": False,
+            "error": (
+                ready.get("error")
+                if isinstance(ready, dict)
+                else "fresh_chat_composer_timeout"
+            ) or "fresh_chat_composer_timeout",
+            "stage": "wait_fresh_chat",
+            "participant": label,
+            "detail": ready,
+            "tab": tab,
+        }
+
+    current_url = core.tab_url(tab["id"])
+    if current_url:
+        tab["url"] = current_url
+
+    if callable(progress):
+        progress({
+            "label": label,
+            "stage": "initial_prompt",
+            "status": "starting",
+            "prompt": _FRESH_CHAT_INITIAL_PROMPT,
+        })
+
+    initiated = _initiate_fresh_chatgpt_tab(tab["id"])
+    tab["initialization"] = initiated
+    if not initiated.get("ok"):
+        return {
+            "ok": False,
+            "error": initiated.get(
+                "error",
+                "fresh_chat_initialization_failed",
+            ),
+            "stage": initiated.get(
+                "stage",
+                "verify_initial_prompt",
+            ),
+            "participant": label,
+            "detail": initiated,
+            "tab": tab,
+        }
+
+    tab["url"] = initiated.get("url") or tab["url"]
+    if callable(progress):
+        progress({
+            "label": label,
+            "stage": "initial_prompt",
+            "status": "complete",
+            "url": tab["url"],
+            "page_activity": initiated.get("page_activity"),
+        })
+
+    return {
+        "ok": True,
+        "participant": label,
+        "tab": tab,
+    }
+
+
 def _emit_protocol_progress(progress, label, stage, status, **extra):
     if not callable(progress):
         return
@@ -1297,6 +1421,232 @@ def initialize_parley_pair(
     }
 
 
+
+
+def prepare_parley_session(
+    initial_prompt,
+    participant_specs,
+    *,
+    should_stop=None,
+    progress=None,
+):
+    """Prepare a Parley session from independently selected A/B sources.
+
+    Each participant spec must declare source="existing" with a concrete tab,
+    or source="fresh". Mixed existing/fresh sessions are supported.
+    """
+    prompt = str(initial_prompt or "").strip()
+    if not prompt:
+        return {
+            "ok": False,
+            "error": "parley_initial_prompt_required",
+            "stage": "initial_prompt",
+        }
+
+    specs = participant_specs if isinstance(participant_specs, dict) else {}
+    resolved = {}
+    sources = {}
+
+    def emit(stage, status, **extra):
+        if not callable(progress):
+            return
+        event = {"stage": stage, "status": status}
+        event.update(extra)
+        progress(event)
+
+    emit("participants", "starting")
+
+    for label in ("A", "B"):
+        spec = specs.get(label)
+        if not isinstance(spec, dict):
+            return {
+                "ok": False,
+                "error": "parley_participant_spec_required",
+                "stage": "participants",
+                "participant": label,
+            }
+
+        source = str(spec.get("source") or "").strip().lower()
+        sources[label] = source
+
+        if source == "fresh":
+            emit(
+                "participant",
+                "starting",
+                label=label,
+                source="fresh",
+            )
+            fresh = create_fresh_chatgpt_participant(
+                label,
+                progress=progress,
+            )
+            if not isinstance(fresh, dict) or not fresh.get("ok"):
+                return {
+                    "ok": False,
+                    "error": (
+                        fresh.get("error")
+                        if isinstance(fresh, dict)
+                        else "fresh_chat_create_failed"
+                    ) or "fresh_chat_create_failed",
+                    "stage": (
+                        fresh.get("stage", "participants")
+                        if isinstance(fresh, dict)
+                        else "participants"
+                    ),
+                    "participant": label,
+                    "detail": fresh,
+                    "participants": resolved,
+                }
+            resolved[label] = dict(fresh["tab"])
+            resolved[label]["source"] = "fresh"
+            emit(
+                "participant",
+                "complete",
+                label=label,
+                source="fresh",
+                tab_id=resolved[label]["id"],
+            )
+        elif source == "existing":
+            tab = spec.get("tab")
+            if not isinstance(tab, dict) or not tab.get("id"):
+                return {
+                    "ok": False,
+                    "error": "parley_existing_tab_required",
+                    "stage": "participants",
+                    "participant": label,
+                }
+            resolved[label] = dict(tab)
+            resolved[label]["source"] = "existing"
+            emit(
+                "participant",
+                "complete",
+                label=label,
+                source="existing",
+                tab_id=resolved[label]["id"],
+            )
+        else:
+            return {
+                "ok": False,
+                "error": "parley_participant_source_invalid",
+                "stage": "participants",
+                "participant": label,
+                "source": source or None,
+            }
+
+        if callable(should_stop) and should_stop():
+            return {
+                "ok": False,
+                "error": "chatgpt_wait_stopped",
+                "stage": "participants",
+                "participant": label,
+                "participants": resolved,
+            }
+
+    tab_a = resolved["A"]
+    tab_b = resolved["B"]
+    if tab_a["id"] == tab_b["id"]:
+        return {
+            "ok": False,
+            "error": "parley_same_tab",
+            "stage": "participants",
+            "A": tab_a,
+            "B": tab_b,
+        }
+
+    emit("participants", "complete")
+
+    emit("protocols", "starting")
+    initialized = initialize_parley_pair(
+        tab_a["id"],
+        tab_b["id"],
+        wait_timeout_ms=None,
+        should_stop=should_stop,
+        progress=progress,
+    )
+    if not isinstance(initialized, dict) or not initialized.get("ok"):
+        return {
+            "ok": False,
+            "error": (
+                initialized.get("error")
+                if isinstance(initialized, dict)
+                else "parley_protocol_bootstrap_failed"
+            ) or "parley_protocol_bootstrap_failed",
+            "stage": (
+                initialized.get("stage", "protocols")
+                if isinstance(initialized, dict)
+                else "protocols"
+            ),
+            "participant": (
+                initialized.get("participant")
+                if isinstance(initialized, dict)
+                else None
+            ),
+            "detail": initialized,
+            "A": tab_a,
+            "B": tab_b,
+            "sources": sources,
+        }
+
+    emit("protocols", "complete")
+    emit("session_prompt", "starting", label="A")
+    initial = send_and_wait(
+        tab_a["id"],
+        prompt,
+        wait_timeout_ms=None,
+        expected_reply_prefix=TEST_A_REPLY_PREFIX,
+        expected_reply_suffix=TEST_A_REPLY_SUFFIX,
+        should_stop=should_stop,
+    )
+    if (
+        not isinstance(initial, dict)
+        or initial.get("error")
+        or not initial.get("response_complete")
+    ):
+        return {
+            "ok": False,
+            "error": (
+                initial.get("error")
+                if isinstance(initial, dict)
+                else "parley_initial_prompt_failed"
+            ) or "parley_initial_prompt_failed",
+            "stage": "session_prompt",
+            "participant": "A",
+            "detail": initial,
+            "A": tab_a,
+            "B": tab_b,
+            "sources": sources,
+        }
+
+    text = (initial.get("response_text") or "").strip()
+    if text == RESET_CHAT_COMMAND:
+        return {
+            "ok": False,
+            "error": "parley_initial_reset_requested",
+            "stage": "session_prompt",
+            "participant": "A",
+            "detail": initial,
+            "A": tab_a,
+            "B": tab_b,
+            "sources": sources,
+        }
+
+    emit(
+        "session_prompt",
+        "complete",
+        label="A",
+        response_chars=len(text),
+    )
+    return {
+        "ok": True,
+        "stage": "ready",
+        "A": tab_a,
+        "B": tab_b,
+        "sources": sources,
+        "protocols": initialized,
+        "initial_prompt": prompt,
+        "initial_response": initial,
+        "initial_response_text": text,
+    }
 
 
 def prepare_fresh_parley_session(
