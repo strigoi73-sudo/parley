@@ -50,8 +50,8 @@ Use the existing responsibility boundaries rather than putting new behavior into
 - `parley/adapters/chatgpt_strict.py` — strict ChatGPT turn extraction.
 - `parley/workflows.py` — higher-level browser/chat orchestration, participant preparation, and protocol bootstrap.
 - `parley/relay/` — deterministic A/B sequencing, dedupe, control, state, and audit behavior.
-- `parley/cli.py` — command-line presentation and argument handling.
-- `parley/app.py` — desktop presentation.
+- `parley/app.py` — supported desktop relay presentation/controller.
+- `parley/cli.py` — desktop launcher plus lower-level developer/debug commands; do not recreate a second production relay controller here.
 - `parley/protocols/` — canonical runtime Parley A/B protocol files.
 - `tests/` — regression coverage.
 
