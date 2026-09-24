@@ -52,11 +52,10 @@ import queue
 import sys
 import threading
 import time
-from urllib.parse import urlparse
-
 from . import core
 from . import workflows
 from .adapters.js import make_focus_and_type_js
+from .participants import eligible_chatgpt_tabs
 from .relay import RelaySession
 from .relay.engine import (
     RESET_CHAT_COMMAND,
@@ -78,25 +77,11 @@ def cmd_type(tab_id, text):
 
 
 def _chatgpt_tabs():
-    """Return only targets whose hostname is an approved ChatGPT host."""
+    """Return only addressable targets on approved ChatGPT hosts."""
     tabs = core.list_tabs()
     if isinstance(tabs, dict):
         return tabs
-
-    allowed_hosts = {
-        "chatgpt.com",
-        "www.chatgpt.com",
-        "chat.openai.com",
-    }
-    result = []
-    for tab in tabs:
-        try:
-            host = (urlparse(tab.get("url") or "").hostname or "").lower()
-        except ValueError:
-            host = ""
-        if host in allowed_hosts:
-            result.append(tab)
-    return result
+    return eligible_chatgpt_tabs(tabs)
 
 
 def _print_chatgpt_tabs(tabs):
