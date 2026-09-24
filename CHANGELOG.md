@@ -13,7 +13,8 @@ The project uses Semantic Versioning for formal releases. The Git history remain
 - unified general and all-fresh session startup after participant resolution so protocol bootstrap and the initial A transaction have one implementation;
 - unified startup RESET CHAT propagation across workflow, CLI, and desktop handling, with reset outcomes represented as clean coordinated stops rather than startup failures;
 - retired the interactive `parley relay` CLI and its PowerShell launcher so the desktop app is the single supported production relay interface; retained CLI launcher/listing/debug utilities and the low-level `bridge` command;
-- extracted the A/B protocol provisioning, acknowledgement barrier, and activation sequence into a dedicated bootstrap orchestration module while preserving the existing workflow API.
+- extracted the A/B protocol provisioning, acknowledgement barrier, and activation sequence into a dedicated bootstrap orchestration module while preserving the existing workflow API;
+- extracted the strict ChatGPT send/wait state machine into a dedicated transaction module with explicit workflow-provided dependencies, while preserving the existing workflow API and fail-closed semantics.
 
 ## [1.1.0] - 2026-09-24
 
