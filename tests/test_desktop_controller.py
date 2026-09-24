@@ -275,7 +275,7 @@ class DesktopControllerTests(unittest.TestCase):
         finished.assert_called_once()
 
     def test_reset_clears_completed_runtime_state(self):
-        clock = mock.Mock(side_effect=[10.0, 16.9])
+        clock = mock.Mock(return_value=16.9)
         controller, _ = self.make_controller(monotonic=clock)
         controller.started_at = 10.0
         controller.tabs = {
