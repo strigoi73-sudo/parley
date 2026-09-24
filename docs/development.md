@@ -39,9 +39,23 @@ Parley requires Python 3.11 or newer. Runtime dependency and package metadata ar
 
 The editable install exposes the same CLI through the `parley` command while keeping source edits immediately active.
 
+## Automated CI
+
+GitHub Actions runs the repository CI workflow for every pull request targeting `main`, every push to `main`, and manual workflow dispatches.
+
+CI runs on Linux across Python 3.11, 3.12, 3.13, and 3.14. Each matrix job:
+
+1. installs Parley from `pyproject.toml`;
+2. verifies the `parley` console script is installed;
+3. builds a wheel and verifies the two runtime protocol Markdown files are packaged;
+4. compiles the Python sources;
+5. runs the complete `unittest` suite.
+
+Authenticated live-Chrome smoke tests remain manual because CI does not have the maintainer's signed-in Chrome session.
+
 ## Local verification
 
-Always run commands through the repository virtual environment so tests do not accidentally use a different system Python.
+CI supplements local verification; it does not replace focused testing while developing. Always run commands through the repository virtual environment so tests do not accidentally use a different system Python.
 
 ### Windows
 
