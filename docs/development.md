@@ -151,6 +151,12 @@ Before opening it:
 
 Avoid force-pushing `main` or treating long-lived feature branches as the new product baseline.
 
+## Releases
+
+Formal releases follow [releases.md](releases.md). The canonical version lives in `parley_version.py`; do not hard-code the package version elsewhere.
+
+Release preparation updates the canonical version and `CHANGELOG.md`, runs the normal local verification gate, performs any required live Chrome smoke test, merges through a PR, and only then creates the immutable `vMAJOR.MINOR.PATCH` tag and GitHub Release.
+
 ## Repository maintenance
 
 Repository-wide tooling changes such as packaging metadata, verification policy, branch protection, issue templates, and release/version policy should be made as explicit maintenance changes rather than smuggled into unrelated runtime work.
