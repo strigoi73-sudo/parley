@@ -133,9 +133,9 @@ The runtime A/B protocols live only under `parley/protocols/`; do not create doc
 
 ## Bug reports
 
-GitHub Issues are not currently enabled for this fork. Until an issue tracker is enabled, use pull requests for fixes you can reproduce and propose.
+GitHub Issues are not currently enabled for this fork. Issue forms are already stored under `.github/ISSUE_TEMPLATE/` and will become available when the repository issue tracker is enabled.
 
-Do not disclose credentials or sensitive browser/session data in a public PR.
+Until then, use pull requests for fixes you can reproduce and propose. Do not disclose credentials or sensitive browser/session data in a public PR. Security vulnerabilities should follow [SECURITY.md](SECURITY.md) rather than a public issue or PR.
 
 ## Code of conduct
 
