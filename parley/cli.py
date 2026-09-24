@@ -112,7 +112,7 @@ def main(argv=None):
         cmd in ("chats", "app")
         and "PARLEY_CONNECTION_MODE" not in os.environ
     ):
-        # The primary relay workflow targets the user's already-running,
+        # The supported desktop relay workflow targets the user's already-running,
         # signed-in Chrome session.
         os.environ["PARLEY_CONNECTION_MODE"] = "live"
 
