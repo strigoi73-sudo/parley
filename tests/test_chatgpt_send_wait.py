@@ -28,6 +28,105 @@ def runtime_value(value):
     return {"result": {"value": value}}
 
 
+class ChatGPTTransactionDelegationTests(unittest.TestCase):
+    def test_workflow_wrapper_delegates_with_current_transaction_primitives(self):
+        adapter = ChatGPTAdapter()
+        with mock.patch.object(
+            workflows.chatgpt_transactions,
+            "send_and_wait",
+            return_value={
+                "response_complete": True,
+                "response_text": "done",
+            },
+        ) as transaction:
+            result = workflows._chatgpt_send_and_wait(
+                "TAB-A",
+                "hello",
+                wait_timeout_ms=4321,
+                silence_ms=321,
+                adapter=adapter,
+                expected_reply_prefix="A REPLY:",
+                expected_reply_suffix="A REPLY END",
+                should_stop=mock.sentinel.should_stop,
+                pre_state_override=mock.sentinel.pre_state,
+                require_user_text_match=False,
+                submission_timeout_ms=9876,
+                retry_unsent_submission=True,
+                required_attachment_filename="protocol.md",
+                submission_retry_interval_ms=654,
+                max_submission_attempts=7,
+            )
+
+        self.assertEqual(
+            result,
+            {
+                "response_complete": True,
+                "response_text": "done",
+            },
+        )
+        transaction.assert_called_once()
+        args = transaction.call_args.args
+        kwargs = transaction.call_args.kwargs
+        self.assertEqual(args, ("TAB-A", "hello"))
+        self.assertEqual(kwargs["wait_timeout_ms"], 4321)
+        self.assertEqual(kwargs["silence_ms"], 321)
+        self.assertIs(kwargs["adapter"], adapter)
+        self.assertEqual(kwargs["expected_reply_prefix"], "A REPLY:")
+        self.assertEqual(kwargs["expected_reply_suffix"], "A REPLY END")
+        self.assertIs(kwargs["should_stop"], mock.sentinel.should_stop)
+        self.assertIs(
+            kwargs["pre_state_override"],
+            mock.sentinel.pre_state,
+        )
+        self.assertFalse(kwargs["require_user_text_match"])
+        self.assertEqual(kwargs["submission_timeout_ms"], 9876)
+        self.assertTrue(kwargs["retry_unsent_submission"])
+        self.assertEqual(
+            kwargs["required_attachment_filename"],
+            "protocol.md",
+        )
+        self.assertEqual(kwargs["submission_retry_interval_ms"], 654)
+        self.assertEqual(kwargs["max_submission_attempts"], 7)
+
+        operations = kwargs["operations"]
+        self.assertIs(
+            operations.adapter_for_tab,
+            workflows._adapter_for_tab,
+        )
+        self.assertIs(operations.connect, workflows.cdp_connect)
+        self.assertIs(
+            operations.focus_emulation,
+            workflows.core.set_focus_emulation,
+        )
+        self.assertIs(operations.state, workflows._chatgpt_state)
+        self.assertIs(operations.evaluate, workflows._chatgpt_eval)
+        self.assertIs(operations.send, workflows.cdp_send)
+        self.assertIs(
+            operations.has_new_user,
+            workflows._chatgpt_has_new_user,
+        )
+        self.assertIs(
+            operations.has_new_assistant,
+            workflows._chatgpt_has_new_assistant,
+        )
+        self.assertIs(
+            operations.same_user_turn,
+            workflows._chatgpt_same_user_turn,
+        )
+        self.assertIs(
+            operations.normalize_text,
+            workflows._normalize_chatgpt_text,
+        )
+        self.assertIs(
+            operations.page_activity,
+            workflows._chatgpt_page_activity,
+        )
+        self.assertIs(
+            operations.unsent_submission_js,
+            workflows._chatgpt_unsent_submission_js,
+        )
+
+
 class ChatGPTSendAndWaitTests(unittest.TestCase):
     def setUp(self):
         self.adapter = ChatGPTAdapter()
