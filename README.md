@@ -130,6 +130,7 @@ The current runtime is organized around explicit responsibility boundaries:
 ```text
 parley/
 ├── app.py                 desktop presentation
+├── desktop_controller.py  non-Tkinter desktop runtime lifecycle
 ├── cli.py                 desktop launcher and developer utilities
 ├── core.py                generic CDP operations and transport dispatch
 ├── live_browser.py        persistent live-Chrome transport
