@@ -1,3 +1,11 @@
+# Historical development record
+
+> **Superseded.** This file is retained to preserve the development record that led to the current implementation. It is **not** the current architecture, roadmap, branch plan, or handoff document.
+>
+> For current behavior, see [../architecture.md](../architecture.md), [../development.md](../development.md), and the repository [README](../../README.md).
+
+---
+
 # ChatGPT-to-ChatGPT Relay Development Plan
 
 Status: **Active planning baseline**  
