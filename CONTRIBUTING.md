@@ -83,7 +83,7 @@ Parley currently has one external runtime dependency, `websocket-client`. Add de
 
 ## Testing
 
-For ordinary changes, run the complete local regression suite before opening a PR.
+For ordinary changes, run the complete local regression suite before opening a PR. Parley intentionally relies on local verification rather than GitHub Actions because hosted Actions usage is limited.
 
 Windows:
 
