@@ -95,7 +95,7 @@ Current responsibilities include:
 - reading and validating participant tabs;
 - ChatGPT send-and-wait transactions;
 - tracking newly submitted user turns and corresponding assistant replies;
-- fresh ChatGPT participant creation;
+- fresh ChatGPT participant creation through shared create/ready/seed lifecycle phases;
 - existing/fresh participant preparation;
 - protocol-file upload and activation;
 - barriered A/B initialization;
