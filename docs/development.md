@@ -24,7 +24,8 @@ After a PR is merged, delete the feature branch unless there is a concrete reaso
 
 ```powershell
 py -m venv .venv
-.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+.\.venv\Scripts\python.exe -m pip install --upgrade pip
+.\.venv\Scripts\python.exe -m pip install -e .
 ```
 
 ### macOS/Linux
@@ -39,9 +40,15 @@ Parley requires Python 3.11 or newer. Runtime dependency and package metadata ar
 
 The editable install exposes the same CLI through the `parley` command while keeping source edits immediately active.
 
-## Local verification
+## Verification policy
+
+Parley intentionally does **not** use GitHub Actions because hosted Actions usage is limited. Repository verification is local and explicit.
+
+The authoritative pre-merge checks are the compile check and full `unittest` suite below, plus a live Chrome smoke test when browser behavior changes.
 
 Always run commands through the repository virtual environment so tests do not accidentally use a different system Python.
+
+## Local verification
 
 ### Windows
 
@@ -145,4 +152,4 @@ Avoid force-pushing `main` or treating long-lived feature branches as the new pr
 
 ## Repository maintenance
 
-Repository-wide tooling changes such as packaging metadata, CI, branch protection, issue templates, and release/version policy should be made as explicit maintenance changes rather than smuggled into unrelated runtime work.
+Repository-wide tooling changes such as packaging metadata, verification policy, branch protection, issue templates, and release/version policy should be made as explicit maintenance changes rather than smuggled into unrelated runtime work.
