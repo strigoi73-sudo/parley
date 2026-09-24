@@ -6,7 +6,9 @@ The project uses Semantic Versioning for formal releases. The Git history remain
 
 ## [Unreleased]
 
-No unreleased changes are recorded yet.
+### Changed
+
+- centralized ChatGPT participant eligibility rules so the CLI and desktop app use the same approved-host and target-ID checks.
 
 ## [1.1.0] - 2026-09-24
 

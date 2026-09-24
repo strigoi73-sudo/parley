@@ -78,6 +78,14 @@ For the production relay, failure to identify the expected ChatGPT turn is an er
 
 Other inherited adapters remain in the package for generic/multi-site use.
 
+## `parley/participants.py` — participant discovery
+
+This small shared layer owns the pure rules for recognizing addressable ChatGPT browser targets.
+
+It centralizes the approved ChatGPT hostnames and filters raw browser targets for both the CLI and desktop app. Presentation layers remain responsible for how eligible targets are displayed or selected.
+
+It does **not** create tabs, bind relay roles, initialize protocols, or perform browser operations.
+
 ## `parley/workflows.py` — orchestration
 
 The workflow layer coordinates browser primitives and site-specific behavior into higher-level operations.

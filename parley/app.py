@@ -11,9 +11,9 @@ import threading
 import time
 import tkinter as tk
 from tkinter import messagebox, simpledialog, ttk
-from urllib.parse import urlparse
 
 from . import core, workflows
+from .participants import eligible_chatgpt_tabs
 from .relay import RelaySession
 from .relay.engine import (
     TEST_A_REPLY_PREFIX,
@@ -452,24 +452,6 @@ class ParleyApp:
         else:
             box.configure(state="disabled")
 
-    def _eligible_chatgpt_tabs(self, tabs):
-        allowed_hosts = {
-            "chatgpt.com",
-            "www.chatgpt.com",
-            "chat.openai.com",
-        }
-        result = []
-        for tab in tabs or []:
-            try:
-                host = (
-                    urlparse(tab.get("url") or "").hostname or ""
-                ).lower()
-            except ValueError:
-                host = ""
-            if host in allowed_hosts and tab.get("id"):
-                result.append(dict(tab))
-        return result
-
     def _tab_display_name(self, tab):
         title = (tab.get("title") or "Untitled ChatGPT").strip()
         url = tab.get("url") or ""
@@ -487,7 +469,7 @@ class ParleyApp:
                     raise RuntimeError(
                         tabs.get("error") or str(tabs)
                     )
-                eligible = self._eligible_chatgpt_tabs(tabs)
+                eligible = eligible_chatgpt_tabs(tabs)
                 self._post(
                     self._participant_tabs_refreshed,
                     eligible,

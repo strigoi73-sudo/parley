@@ -161,6 +161,7 @@ parley/
 ├── cli.py                 command-line interface
 ├── core.py                generic CDP operations and transport dispatch
 ├── live_browser.py        persistent live-Chrome transport
+├── participants.py        shared ChatGPT target eligibility
 ├── adapters/
 │   ├── chatgpt_strict.py  fail-closed ChatGPT turn extraction
 │   ├── chatgpt.py         inherited ChatGPT adapter behavior
