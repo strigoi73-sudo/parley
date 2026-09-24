@@ -1,8 +1,8 @@
 """Parley desktop application.
 
 Blank-slate desktop UI built around the production fresh-chat lifecycle.
-The UI owns presentation only; startup orchestration lives in workflows.py
-and relay sequencing lives in parley.relay.
+The UI owns presentation only; runtime lifecycle lives in desktop_controller.py,
+startup orchestration lives in workflows.py, and relay sequencing lives in parley.relay.
 """
 
 import os
@@ -1724,14 +1724,8 @@ class ParleyApp:
         self.root.destroy()
 
     def _finish_close_when_safe(self):
-        startup_alive = bool(
-            self._startup_thread
-            and self._startup_thread.is_alive()
-        )
-        session_alive = bool(
-            self.session
-            and self.session.is_alive()
-        )
+        startup_alive = self.controller.startup_alive
+        session_alive = self.controller.session_alive
         if startup_alive or session_alive:
             self.root.after(
                 100,
