@@ -86,6 +86,21 @@ It centralizes the approved ChatGPT hostnames and filters raw browser targets fo
 
 It does **not** create tabs, bind relay roles, initialize protocols, or perform browser operations.
 
+## `parley/bootstrap.py` — protocol bootstrap orchestration
+
+This layer owns the deterministic A/B protocol startup barrier:
+
+```text
+A protocol file -> A acknowledgement
+B protocol file -> B acknowledgement
+A activation
+B activation
+```
+
+It receives browser/ChatGPT operations explicitly from the workflow layer rather than importing workflow internals. That keeps the bootstrap state machine independently testable and prevents circular dependencies.
+
+It does **not** know ChatGPT DOM selectors, implement attachment transport, or implement send-and-wait transactions.
+
 ## `parley/workflows.py` — orchestration
 
 The workflow layer coordinates browser primitives and site-specific behavior into higher-level operations.
@@ -99,8 +114,8 @@ Current responsibilities include:
 - existing/fresh participant resolution;
 - shared resolved-participant session preparation (protocol bootstrap and initial A transaction);
 - coordinated startup reset propagation using the same reset metadata vocabulary as the relay engine;
-- protocol-file upload and activation;
-- barriered A/B initialization;
+- ChatGPT-specific attachment and transaction primitives used by protocol bootstrap;
+- compatibility delegation into the dedicated bootstrap layer;
 - lower-level inherited bridge and site workflows.
 
 The workflow layer prepares reliable operations for the relay engine; it does not own the relay state machine itself.

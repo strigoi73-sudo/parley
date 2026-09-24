@@ -424,6 +424,71 @@ class AttachmentStabilizationTests(unittest.TestCase):
 
 
 
+class ProtocolBootstrapDelegationTests(unittest.TestCase):
+    def test_workflow_wrapper_delegates_with_current_primitives(self):
+        with mock.patch.object(
+            workflows.bootstrap,
+            "initialize_parley_pair",
+            return_value={"ok": True, "stage": "ready"},
+        ) as initialize:
+            result = workflows.initialize_parley_pair(
+                "TAB-A",
+                "TAB-B",
+                wait_timeout_ms=4321,
+                should_stop=mock.sentinel.should_stop,
+                progress=mock.sentinel.progress,
+            )
+
+        self.assertEqual(result, {"ok": True, "stage": "ready"})
+        initialize.assert_called_once()
+        args = initialize.call_args.args
+        kwargs = initialize.call_args.kwargs
+        self.assertEqual(args, ("TAB-A", "TAB-B"))
+        self.assertIs(kwargs["protocols"], workflows._PARLEY_PROTOCOLS)
+        self.assertEqual(kwargs["protocol_dir"], workflows._PARLEY_PROTOCOL_DIR)
+        self.assertEqual(
+            kwargs["attachment_stabilize_seconds"],
+            workflows._PARLEY_ATTACHMENT_STABILIZE_SECONDS,
+        )
+        self.assertEqual(kwargs["wait_timeout_ms"], 4321)
+        self.assertIs(kwargs["should_stop"], mock.sentinel.should_stop)
+        self.assertIs(kwargs["progress"], mock.sentinel.progress)
+
+        operations = kwargs["operations"]
+        self.assertIs(
+            operations.validate_tab,
+            workflows._validate_chatgpt_tab,
+        )
+        self.assertIs(
+            operations.protocol_active,
+            workflows._parley_protocol_active,
+        )
+        self.assertIs(
+            operations.adapter_for_tab,
+            workflows._adapter_for_tab,
+        )
+        self.assertIs(
+            operations.snapshot_state,
+            workflows._snapshot_chatgpt_state,
+        )
+        self.assertIs(
+            operations.attach_file,
+            workflows.attach_chatgpt_file,
+        )
+        self.assertIs(
+            operations.wait_attachment_stable,
+            workflows._wait_protocol_attachment_stable,
+        )
+        self.assertIs(
+            operations.send_ack,
+            workflows._chatgpt_send_and_wait,
+        )
+        self.assertIs(
+            operations.send_activation,
+            workflows.send_and_wait,
+        )
+
+
 class ProtocolBootstrapTests(unittest.TestCase):
     def setUp(self):
         self.validation = mock.patch.object(

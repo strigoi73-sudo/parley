@@ -103,6 +103,7 @@ Before changing behavior, identify which layer owns it.
 - Site DOM knowledge → `adapters/`
 - ChatGPT strict extraction → `adapters/chatgpt_strict.py`
 - Higher-level browser/chat operation → `workflows.py`
+- A/B protocol provisioning/ACK/activation barrier → `bootstrap.py`
 - A/B sequencing, dedupe, control, or audit → `relay/`
 - Desktop relay presentation/controller → `app.py`
 - CLI launcher and developer utilities → `cli.py`
