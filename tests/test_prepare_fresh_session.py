@@ -101,6 +101,8 @@ class PrepareFreshParleySessionTests(unittest.TestCase):
             result["initial_response_text"],
             "A REPLY: Initial answer.\n\nA REPLY END",
         )
+        self.assertIs(result["fresh"], self.fresh)
+        self.assertNotIn("sources", result)
         self.assertEqual(
             calls,
             [
@@ -147,6 +149,8 @@ class PrepareFreshParleySessionTests(unittest.TestCase):
         self.assertEqual(result["error"], "protocol_failed")
         self.assertEqual(result["stage"], "protocol_ack")
         self.assertEqual(result["participant"], "B")
+        self.assertNotIn("fresh", result)
+        self.assertNotIn("sources", result)
         send.assert_not_called()
 
     def test_stop_after_fresh_chat_creation_skips_protocol_bootstrap(self):
@@ -181,6 +185,43 @@ class PrepareFreshParleySessionTests(unittest.TestCase):
             "parley_initial_prompt_required",
         )
         create.assert_not_called()
+
+    def test_fresh_wrapper_delegates_resolved_startup_without_sources(self):
+        common = {
+            "ok": True,
+            "stage": "ready",
+            "A": self.fresh["A"],
+            "B": self.fresh["B"],
+            "protocols": {"ok": True},
+            "initial_prompt": "Discuss culture.",
+            "initial_response": {"response_complete": True},
+            "initial_response_text": "A REPLY: Ready.\n\nA REPLY END",
+        }
+
+        with mock.patch.object(
+            workflows,
+            "create_fresh_chatgpt_pair",
+            return_value=self.fresh,
+        ), mock.patch.object(
+            workflows,
+            "_prepare_resolved_parley_session",
+            return_value=common,
+        ) as prepare:
+            result = workflows.prepare_fresh_parley_session(
+                "  Discuss culture.  ",
+                should_stop=lambda: False,
+                progress=mock.sentinel.progress,
+            )
+
+        prepare.assert_called_once_with(
+            "Discuss culture.",
+            self.fresh["A"],
+            self.fresh["B"],
+            should_stop=mock.ANY,
+            progress=mock.sentinel.progress,
+        )
+        self.assertIs(result["fresh"], self.fresh)
+        self.assertNotIn("sources", result)
 
 
 class PrepareMixedParleySessionTests(unittest.TestCase):
@@ -289,6 +330,52 @@ class PrepareMixedParleySessionTests(unittest.TestCase):
                     result["sources"],
                     {"A": source_a, "B": source_b},
                 )
+
+    def test_general_wrapper_passes_sources_to_resolved_startup(self):
+        specs = {
+            "A": {
+                "source": "existing",
+                "tab": {
+                    "id": "EXISTING-A",
+                    "title": "Existing A",
+                    "url": "https://chatgpt.com/c/a",
+                },
+            },
+            "B": {
+                "source": "existing",
+                "tab": {
+                    "id": "EXISTING-B",
+                    "title": "Existing B",
+                    "url": "https://chatgpt.com/c/b",
+                },
+            },
+        }
+
+        with mock.patch.object(
+            workflows,
+            "_prepare_resolved_parley_session",
+            return_value={"ok": True, "stage": "ready"},
+        ) as prepare:
+            result = workflows.prepare_parley_session(
+                "Discuss culture.",
+                specs,
+                should_stop=lambda: False,
+                progress=mock.sentinel.progress,
+            )
+
+        self.assertTrue(result["ok"])
+        prepare.assert_called_once()
+        args = prepare.call_args.args
+        kwargs = prepare.call_args.kwargs
+        self.assertEqual(args[0], "Discuss culture.")
+        self.assertEqual(args[1]["id"], "EXISTING-A")
+        self.assertEqual(args[2]["id"], "EXISTING-B")
+        self.assertEqual(
+            kwargs["sources"],
+            {"A": "existing", "B": "existing"},
+        )
+        self.assertIs(kwargs["progress"], mock.sentinel.progress)
+        self.assertTrue(callable(kwargs["should_stop"]))
 
     def test_same_existing_tab_is_rejected_before_protocol_bootstrap(self):
         tab = {
