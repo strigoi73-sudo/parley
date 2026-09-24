@@ -265,6 +265,141 @@ class FreshChatCreationTests(unittest.TestCase):
             ],
         )
 
+    def test_create_fresh_participant_uses_same_lifecycle_phases(self):
+        operations = []
+
+        def create(url):
+            operations.append(("create", url))
+            return {
+                "ok": True,
+                "id": "fresh-b",
+                "url": url,
+            }
+
+        def focus(tab_id, enabled, timeout=None):
+            operations.append(("focus", tab_id, enabled, timeout))
+            return {"ok": True, "enabled": enabled}
+
+        def wait(tab_id, selector, timeout_ms):
+            operations.append(("wait", tab_id, selector, timeout_ms))
+            return {"found": True, "waited_ms": 10}
+
+        def initiate(tab_id):
+            operations.append(("initiate", tab_id))
+            return {
+                "ok": True,
+                "url": "https://chatgpt.com/c/fresh-b",
+                "page_activity": {
+                    "visibilityState": "visible",
+                    "hidden": False,
+                    "hasFocus": True,
+                },
+            }
+
+        progress = []
+        with mock.patch.object(
+            workflows.core,
+            "create_tab",
+            side_effect=create,
+        ), mock.patch.object(
+            workflows.core,
+            "set_focus_emulation",
+            side_effect=focus,
+        ), mock.patch.object(
+            workflows.core,
+            "wait_for",
+            side_effect=wait,
+        ), mock.patch.object(
+            workflows.core,
+            "tab_url",
+            return_value="https://chatgpt.com/",
+        ), mock.patch.object(
+            workflows,
+            "_initiate_fresh_chatgpt_tab",
+            side_effect=initiate,
+        ):
+            result = workflows.create_fresh_chatgpt_participant(
+                "b",
+                ready_timeout_ms=9876,
+                progress=progress.append,
+            )
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["participant"], "B")
+        self.assertEqual(result["tab"]["id"], "fresh-b")
+        self.assertEqual(result["tab"]["source"], "fresh")
+        self.assertEqual(
+            result["tab"]["url"],
+            "https://chatgpt.com/c/fresh-b",
+        )
+        self.assertEqual(
+            result["tab"]["initialization"]["url"],
+            "https://chatgpt.com/c/fresh-b",
+        )
+        self.assertEqual(
+            operations,
+            [
+                ("create", "https://chatgpt.com/"),
+                ("focus", "fresh-b", True, None),
+                ("wait", "fresh-b", "#prompt-textarea", 9876),
+                ("initiate", "fresh-b"),
+            ],
+        )
+        self.assertEqual(
+            [event["status"] for event in progress],
+            ["complete", "starting", "complete"],
+        )
+
+    def test_pair_result_shape_does_not_add_single_participant_source(self):
+        with mock.patch.object(
+            workflows.core,
+            "create_tab",
+            side_effect=[
+                {
+                    "ok": True,
+                    "id": "fresh-a",
+                    "url": "https://chatgpt.com/",
+                },
+                {
+                    "ok": True,
+                    "id": "fresh-b",
+                    "url": "https://chatgpt.com/",
+                },
+            ],
+        ), mock.patch.object(
+            workflows.core,
+            "set_focus_emulation",
+            return_value={"ok": True, "enabled": True},
+        ), mock.patch.object(
+            workflows.core,
+            "wait_for",
+            return_value={"found": True},
+        ), mock.patch.object(
+            workflows.core,
+            "tab_url",
+            return_value="https://chatgpt.com/",
+        ), mock.patch.object(
+            workflows,
+            "_initiate_fresh_chatgpt_tab",
+            side_effect=[
+                {
+                    "ok": True,
+                    "url": "https://chatgpt.com/c/a",
+                },
+                {
+                    "ok": True,
+                    "url": "https://chatgpt.com/c/b",
+                },
+            ],
+        ):
+            result = workflows.create_fresh_chatgpt_pair()
+
+        self.assertTrue(result["ok"])
+        self.assertNotIn("source", result["A"])
+        self.assertNotIn("source", result["B"])
+        self.assertIs(result["A"], result["created"]["A"])
+        self.assertIs(result["B"], result["created"]["B"])
+
 
 
 
