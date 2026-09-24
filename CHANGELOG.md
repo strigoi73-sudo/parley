@@ -8,7 +8,8 @@ The project uses Semantic Versioning for formal releases. The Git history remain
 
 ### Changed
 
-- centralized ChatGPT participant eligibility rules so the CLI and desktop app use the same approved-host and target-ID checks.
+- centralized ChatGPT participant eligibility rules so the CLI and desktop app use the same approved-host and target-ID checks;
+- deduplicated fresh ChatGPT participant creation into shared create, composer-ready, and seed/stabilization phases while preserving the pair startup barrier.
 
 ## [1.1.0] - 2026-09-24
 
