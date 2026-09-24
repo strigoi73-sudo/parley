@@ -1179,6 +1179,18 @@ class ParleyApp:
             self._set_participant(label, "Ready", SUCCESS)
         elif stage == "session_prompt":
             text = "Starting the conversation with Chat A…"
+        elif stage == "reset_propagation":
+            text = (
+                "Synchronizing RESET CHAT to Chat B…"
+                if status == "starting"
+                else "RESET CHAT synchronized."
+            )
+            if label:
+                self._set_participant(
+                    label,
+                    "Resetting" if status == "starting" else "Reset",
+                    WARN if status == "starting" else SUCCESS,
+                )
         else:
             text = "Preparing conversation…"
 
@@ -1234,6 +1246,35 @@ class ParleyApp:
                 f"Startup failed during {stage}.\n\n"
                 f"{error or 'Unknown error'}",
             )
+            return
+
+        if (
+            isinstance(result, dict)
+            and result.get("ok")
+            and result.get("reset_requested")
+            and result.get("reset_propagated")
+        ):
+            tab_a = result["A"]
+            tab_b = result["B"]
+            self._tabs = {"A": tab_a, "B": tab_b}
+            self._set_participant_identity("A", tab_a)
+            self._set_participant_identity("B", tab_b)
+            self._set_participant("A", "Reset", SUCCESS)
+            self._set_participant("B", "Reset", SUCCESS)
+            self.live_badge.configure(text="● RESET", fg=MUTED)
+            restart = result.get("restart_point", "A")
+            self._update_session_card(
+                state="Reset",
+                phase=f"Restart at Chat {restart}",
+            )
+            self._diagnostic(
+                "Reset coordinated: "
+                f"{result.get('reset_by', 'A')} → "
+                f"{result.get('reset_acknowledged_by', 'B')}; "
+                f"restart point {restart}"
+            )
+            self._set_mode("idle")
+            self._update_controls()
             return
 
         tab_a = result["A"]
