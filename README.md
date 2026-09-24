@@ -57,12 +57,20 @@ macOS/Linux:
 
 ```bash
 python3 -m venv .venv
-./.venv/bin/python -m pip install -r requirements.txt
+./.venv/bin/python -m pip install --upgrade pip
+./.venv/bin/python -m pip install -e .
 ```
 
-Parley currently has one external runtime dependency: `websocket-client`.
+Parley requires Python 3.11 or newer. Project metadata and runtime dependencies are declared in `pyproject.toml`; `requirements.txt` is retained as a compatibility mirror for existing workflows.
 
-Formal Python package metadata and supported-version declarations will be added separately; until then, use a current Python 3 release.
+An editable install also provides the `parley` console command:
+
+```powershell
+parley chats
+parley app
+```
+
+The root `parley.py` shim remains supported for existing scripts.
 
 ### 3. Enable Chrome remote debugging
 

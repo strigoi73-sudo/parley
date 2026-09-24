@@ -4,6 +4,8 @@ Thanks for contributing to Parley.
 
 The current development target is a reliable, local two-ChatGPT relay using the user's existing Chrome session. The repository also retains inherited generic CDP utilities and adapters, but changes should not weaken the safety and determinism of the production ChatGPT relay.
 
+Python package metadata is defined in `pyproject.toml`. Development installs should normally use `pip install -e .` so the `parley` console entry point and package-data behavior are exercised locally.
+
 Before making a substantial change, read:
 
 - [Architecture](docs/architecture.md)
@@ -34,7 +36,8 @@ macOS/Linux:
 
 ```bash
 python3 -m venv .venv
-./.venv/bin/python -m pip install -r requirements.txt
+./.venv/bin/python -m pip install --upgrade pip
+./.venv/bin/python -m pip install -e .
 ```
 
 ## Where changes belong

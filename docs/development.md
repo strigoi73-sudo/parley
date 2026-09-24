@@ -31,10 +31,13 @@ py -m venv .venv
 
 ```bash
 python3 -m venv .venv
-./.venv/bin/python -m pip install -r requirements.txt
+./.venv/bin/python -m pip install --upgrade pip
+./.venv/bin/python -m pip install -e .
 ```
 
-The current runtime dependency is `websocket-client`.
+Parley requires Python 3.11 or newer. Runtime dependency and package metadata are defined in `pyproject.toml`; `requirements.txt` is retained only as a compatibility mirror.
+
+The editable install exposes the same CLI through the `parley` command while keeping source edits immediately active.
 
 ## Local verification
 

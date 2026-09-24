@@ -1,0 +1,44 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "parley"
+dynamic = ["version"]
+description = "Local CDP browser automation with a deterministic two-ChatGPT relay workflow."
+readme = "README.md"
+requires-python = ">=3.11"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [
+    { name = "Satyajeet" },
+]
+maintainers = [
+    { name = "strigoi73-sudo" },
+]
+keywords = [
+    "browser-automation",
+    "cdp",
+    "chatgpt",
+    "chrome",
+    "relay",
+]
+dependencies = [
+    "websocket-client>=1.6.0",
+]
+
+[project.urls]
+Repository = "https://github.com/strigoi73-sudo/parley"
+Upstream = "https://github.com/Satyajeet-04/parley"
+
+[project.scripts]
+parley = "parley.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["parley", "parley.*"]
+
+[tool.setuptools.package-data]
+parley = ["protocols/*.md"]
+
+[tool.setuptools.dynamic]
+version = { attr = "parley.__version__" }
