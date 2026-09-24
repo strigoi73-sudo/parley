@@ -11,7 +11,8 @@ The project uses Semantic Versioning for formal releases. The Git history remain
 - centralized ChatGPT participant eligibility rules so the CLI and desktop app use the same approved-host and target-ID checks;
 - deduplicated fresh ChatGPT participant creation into shared create, composer-ready, and seed/stabilization phases while preserving the pair startup barrier;
 - unified general and all-fresh session startup after participant resolution so protocol bootstrap and the initial A transaction have one implementation;
-- unified startup RESET CHAT propagation across workflow, CLI, and desktop handling, with reset outcomes represented as clean coordinated stops rather than startup failures.
+- unified startup RESET CHAT propagation across workflow, CLI, and desktop handling, with reset outcomes represented as clean coordinated stops rather than startup failures;
+- retired the interactive `parley relay` CLI and its PowerShell launcher so the desktop app is the single supported production relay interface; retained CLI launcher/listing/debug utilities and the low-level `bridge` command.
 
 ## [1.1.0] - 2026-09-24
 
