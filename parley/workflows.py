@@ -38,6 +38,7 @@ from .relay.engine import (
     TEST_B_REPLY_PREFIX,
     TEST_B_REPLY_SUFFIX,
     RESET_CHAT_COMMAND,
+    RELAY_RESPONSE_TIMEOUT_MS,
 )
 
 
@@ -1448,6 +1449,101 @@ def _emit_session_progress(progress, stage, status, **extra):
     progress(event)
 
 
+def coordinate_parley_reset(
+    source_label,
+    tab_a,
+    tab_b,
+    *,
+    should_stop=None,
+):
+    """Propagate an exact RESET CHAT command to the counterpart participant."""
+    label = str(source_label or "").strip().upper()
+    if label not in ("A", "B"):
+        return {
+            "ok": False,
+            "error": "parley_reset_source_invalid",
+            "stage": "reset_propagation",
+            "reset_requested": True,
+            "reset_by": label or None,
+            "reset_propagated": False,
+            "restart_point": "A",
+            "awaiting_human_restart": True,
+        }
+
+    counterpart_label = "B" if label == "A" else "A"
+    counterpart_tab = tab_b if label == "A" else tab_a
+    expected_prefix = (
+        TEST_B_REPLY_PREFIX if label == "A" else TEST_A_REPLY_PREFIX
+    )
+    expected_suffix = (
+        TEST_B_REPLY_SUFFIX if label == "A" else TEST_A_REPLY_SUFFIX
+    )
+
+    result = {
+        "reset_requested": True,
+        "reset_by": label,
+        "reset_propagated": False,
+        "restart_point": "A",
+        "awaiting_human_restart": True,
+    }
+
+    try:
+        response = send_and_wait(
+            counterpart_tab,
+            RESET_CHAT_COMMAND,
+            wait_timeout_ms=RELAY_RESPONSE_TIMEOUT_MS,
+            should_stop=should_stop,
+            expected_reply_prefix=expected_prefix,
+            expected_reply_suffix=expected_suffix,
+        )
+    except Exception as exc:
+        return {
+            "ok": False,
+            "error": "parley_reset_propagation_failed",
+            "stage": "reset_propagation",
+            "detail": {"exception": str(exc)},
+            **result,
+        }
+
+    text = (
+        (response.get("response_text") or "").strip()
+        if isinstance(response, dict)
+        else ""
+    )
+    if (
+        not isinstance(response, dict)
+        or response.get("error")
+        or not response.get("response_complete")
+        or text != RESET_CHAT_COMMAND
+    ):
+        error = (
+            response.get("error")
+            if isinstance(response, dict)
+            else None
+        )
+        return {
+            "ok": False,
+            "error": (
+                error
+                if error == "chatgpt_wait_stopped"
+                else "parley_reset_propagation_failed"
+            ),
+            "stage": "reset_propagation",
+            "detail": response,
+            **result,
+        }
+
+    return {
+        "ok": True,
+        "status": "stopped",
+        "stage": "reset",
+        "reset_acknowledged_by": counterpart_label,
+        "reset_response": response,
+        **result,
+        "reset_propagated": True,
+    }
+
+
 def _prepare_resolved_parley_session(
     prompt,
     tab_a,
@@ -1530,12 +1626,44 @@ def _prepare_resolved_parley_session(
 
     text = (initial.get("response_text") or "").strip()
     if text == RESET_CHAT_COMMAND:
+        _emit_session_progress(
+            progress,
+            "reset_propagation",
+            "starting",
+            label="B",
+            reset_by="A",
+        )
+        reset = coordinate_parley_reset(
+            "A",
+            tab_a["id"],
+            tab_b["id"],
+            should_stop=should_stop,
+        )
+        if not reset.get("ok"):
+            return {
+                **reset,
+                "participant": "B",
+                "initial_prompt": prompt,
+                "initial_response": initial,
+                "initial_response_text": text,
+                "protocols": initialized,
+                **context,
+            }
+
+        _emit_session_progress(
+            progress,
+            "reset_propagation",
+            "complete",
+            label="B",
+            reset_by="A",
+            restart_point=reset.get("restart_point"),
+        )
         return {
-            "ok": False,
-            "error": "parley_initial_reset_requested",
-            "stage": "session_prompt",
-            "participant": "A",
-            "detail": initial,
+            **reset,
+            "initial_prompt": prompt,
+            "initial_response": initial,
+            "initial_response_text": text,
+            "protocols": initialized,
             **context,
         }
 

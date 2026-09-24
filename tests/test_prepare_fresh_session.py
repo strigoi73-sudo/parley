@@ -224,6 +224,180 @@ class PrepareFreshParleySessionTests(unittest.TestCase):
         self.assertNotIn("sources", result)
 
 
+class StartupResetTests(unittest.TestCase):
+    def test_coordinate_reset_propagates_a_to_b_with_expected_markers(self):
+        should_stop = lambda: False
+        response = {
+            "response_text": "RESET CHAT",
+            "response_complete": True,
+        }
+
+        with mock.patch.object(
+            workflows,
+            "send_and_wait",
+            return_value=response,
+        ) as send:
+            result = workflows.coordinate_parley_reset(
+                "A",
+                "TAB-A",
+                "TAB-B",
+                should_stop=should_stop,
+            )
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["status"], "stopped")
+        self.assertEqual(result["stage"], "reset")
+        self.assertTrue(result["reset_requested"])
+        self.assertTrue(result["reset_propagated"])
+        self.assertEqual(result["reset_by"], "A")
+        self.assertEqual(result["reset_acknowledged_by"], "B")
+        self.assertEqual(result["restart_point"], "A")
+        self.assertTrue(result["awaiting_human_restart"])
+        self.assertIs(result["reset_response"], response)
+        send.assert_called_once_with(
+            "TAB-B",
+            "RESET CHAT",
+            wait_timeout_ms=workflows.RELAY_RESPONSE_TIMEOUT_MS,
+            should_stop=should_stop,
+            expected_reply_prefix="B REPLY:",
+            expected_reply_suffix="B REPLY END",
+        )
+
+    def test_coordinate_reset_fails_closed_without_exact_ack(self):
+        with mock.patch.object(
+            workflows,
+            "send_and_wait",
+            return_value={
+                "response_text": "B REPLY: Not reset.\n\nB REPLY END",
+                "response_complete": True,
+            },
+        ):
+            result = workflows.coordinate_parley_reset(
+                "A",
+                "TAB-A",
+                "TAB-B",
+            )
+
+        self.assertFalse(result["ok"])
+        self.assertEqual(
+            result["error"],
+            "parley_reset_propagation_failed",
+        )
+        self.assertEqual(result["stage"], "reset_propagation")
+        self.assertTrue(result["reset_requested"])
+        self.assertFalse(result["reset_propagated"])
+        self.assertEqual(result["restart_point"], "A")
+
+    def test_resolved_startup_returns_clean_reset_outcome(self):
+        responses = [
+            {
+                "response_text": "RESET CHAT",
+                "response_complete": True,
+            },
+            {
+                "response_text": "RESET CHAT",
+                "response_complete": True,
+            },
+        ]
+        progress = []
+
+        with mock.patch.object(
+            workflows,
+            "initialize_parley_pair",
+            return_value={
+                "ok": True,
+                "response_complete": True,
+                "stage": "ready",
+                "participants": {},
+            },
+        ), mock.patch.object(
+            workflows,
+            "send_and_wait",
+            side_effect=responses,
+        ):
+            result = workflows._prepare_resolved_parley_session(
+                "Discuss culture.",
+                {"id": "TAB-A"},
+                {"id": "TAB-B"},
+                should_stop=lambda: False,
+                progress=progress.append,
+                sources={"A": "existing", "B": "existing"},
+            )
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["status"], "stopped")
+        self.assertEqual(result["stage"], "reset")
+        self.assertTrue(result["reset_propagated"])
+        self.assertEqual(result["reset_acknowledged_by"], "B")
+        self.assertEqual(result["restart_point"], "A")
+        self.assertEqual(
+            result["sources"],
+            {"A": "existing", "B": "existing"},
+        )
+        self.assertEqual(result["initial_response_text"], "RESET CHAT")
+        self.assertIn(
+            {
+                "stage": "reset_propagation",
+                "status": "starting",
+                "label": "B",
+                "reset_by": "A",
+            },
+            progress,
+        )
+        self.assertIn(
+            {
+                "stage": "reset_propagation",
+                "status": "complete",
+                "label": "B",
+                "reset_by": "A",
+                "restart_point": "A",
+            },
+            progress,
+        )
+
+    def test_resolved_startup_reset_failure_is_not_ready(self):
+        responses = [
+            {
+                "response_text": "RESET CHAT",
+                "response_complete": True,
+            },
+            {
+                "response_text": "B REPLY: no reset\n\nB REPLY END",
+                "response_complete": True,
+            },
+        ]
+
+        with mock.patch.object(
+            workflows,
+            "initialize_parley_pair",
+            return_value={
+                "ok": True,
+                "response_complete": True,
+                "stage": "ready",
+                "participants": {},
+            },
+        ), mock.patch.object(
+            workflows,
+            "send_and_wait",
+            side_effect=responses,
+        ):
+            result = workflows._prepare_resolved_parley_session(
+                "Discuss culture.",
+                {"id": "TAB-A"},
+                {"id": "TAB-B"},
+            )
+
+        self.assertFalse(result["ok"])
+        self.assertEqual(
+            result["error"],
+            "parley_reset_propagation_failed",
+        )
+        self.assertEqual(result["stage"], "reset_propagation")
+        self.assertTrue(result["reset_requested"])
+        self.assertFalse(result["reset_propagated"])
+        self.assertEqual(result["participant"], "B")
+
+
 class PrepareMixedParleySessionTests(unittest.TestCase):
     def _run_case(self, source_a, source_b):
         existing = {
