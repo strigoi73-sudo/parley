@@ -38,6 +38,7 @@ from .relay.engine import (
     TEST_B_REPLY_PREFIX,
     TEST_B_REPLY_SUFFIX,
     RESET_CHAT_COMMAND,
+    RELAY_RESPONSE_TIMEOUT_MS,
 )
 
 
