@@ -913,23 +913,15 @@ def cmd_relay(parts, input_fn=input, input_stream=None):
                 "ChatGPT A returned RESET CHAT. "
                 "Synchronizing reset to ChatGPT B..."
             )
-            reset_result = workflows.send_and_wait(
+            reset_result = workflows.coordinate_parley_reset(
+                "A",
+                tab_a["id"],
                 tab_b["id"],
-                RESET_CHAT_COMMAND,
-                wait_timeout_ms=RELAY_RESPONSE_TIMEOUT_MS,
-                expected_reply_prefix=TEST_B_REPLY_PREFIX,
-                expected_reply_suffix=TEST_B_REPLY_SUFFIX,
-            )
-            reset_text = (
-                (reset_result.get("response_text") or "").strip()
-                if isinstance(reset_result, dict)
-                else ""
             )
             if (
                 not isinstance(reset_result, dict)
-                or reset_result.get("error")
-                or not reset_result.get("response_complete")
-                or reset_text != RESET_CHAT_COMMAND
+                or not reset_result.get("ok")
+                or not reset_result.get("reset_propagated")
             ):
                 print("Could not confirm RESET CHAT from ChatGPT B.")
                 if options["json_output"]:
@@ -938,7 +930,8 @@ def cmd_relay(parts, input_fn=input, input_stream=None):
 
             print(
                 "Reset coordinated: A -> B. "
-                "Restart point: A."
+                "Restart point: %s."
+                % reset_result.get("restart_point", "A")
             )
             return 0
 
