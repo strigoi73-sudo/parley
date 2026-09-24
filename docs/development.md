@@ -102,7 +102,8 @@ Before changing behavior, identify which layer owns it.
 - Generic CDP primitive → `core.py`
 - Site DOM knowledge → `adapters/`
 - ChatGPT strict extraction → `adapters/chatgpt_strict.py`
-- Higher-level browser/chat operation → `workflows.py`
+- Higher-level browser/chat operation and ChatGPT state helpers → `workflows.py`
+- Strict ChatGPT send/wait transaction sequencing → `chatgpt_transactions.py`
 - A/B protocol provisioning/ACK/activation barrier → `bootstrap.py`
 - A/B sequencing, dedupe, control, or audit → `relay/`
 - Desktop relay presentation/controller → `app.py`

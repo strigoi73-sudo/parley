@@ -135,6 +135,7 @@ parley/
 ├── live_browser.py        persistent live-Chrome transport
 ├── participants.py        shared ChatGPT target eligibility
 ├── bootstrap.py           barriered A/B protocol orchestration
+├── chatgpt_transactions.py strict ChatGPT send/wait state machine
 ├── adapters/
 │   ├── chatgpt_strict.py  fail-closed ChatGPT turn extraction
 │   ├── chatgpt.py         inherited ChatGPT adapter behavior

@@ -86,6 +86,20 @@ It centralizes the approved ChatGPT hostnames and filters raw browser targets fo
 
 It does **not** create tabs, bind relay roles, initialize protocols, or perform browser operations.
 
+## `parley/chatgpt_transactions.py` — strict ChatGPT transactions
+
+This layer owns the fail-closed send/wait state machine for one ChatGPT transaction:
+
+- keep one target connection from pre-submit snapshot through completion;
+- prove submission by observing a newer user turn;
+- prove the response belongs to that submitted turn;
+- follow transient assistant-candidate replacement only while the verified user-turn boundary remains unchanged;
+- enforce optional protocol reply markers;
+- allow exact `RESET CHAT` handling in marked protocol transactions;
+- fail closed when turn identity becomes ambiguous.
+
+Browser transport, DOM extraction, comparison helpers, retry evidence generation, and clock functions are supplied explicitly by `workflows.py`. The module therefore owns transaction sequencing without importing workflow internals.
+
 ## `parley/bootstrap.py` — protocol bootstrap orchestration
 
 This layer owns the deterministic A/B protocol startup barrier:
@@ -108,8 +122,8 @@ The workflow layer coordinates browser primitives and site-specific behavior int
 Current responsibilities include:
 
 - reading and validating participant tabs;
-- ChatGPT send-and-wait transactions;
-- tracking newly submitted user turns and corresponding assistant replies;
+- ChatGPT-specific state extraction and transaction helper primitives;
+- compatibility delegation into the dedicated strict transaction layer;
 - fresh ChatGPT participant creation through shared create/ready/seed lifecycle phases;
 - existing/fresh participant resolution;
 - shared resolved-participant session preparation (protocol bootstrap and initial A transaction);
