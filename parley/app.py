@@ -1,8 +1,8 @@
 """Parley desktop application.
 
 Blank-slate desktop UI built around the production fresh-chat lifecycle.
-The UI owns presentation only; startup orchestration lives in workflows.py
-and relay sequencing lives in parley.relay.
+The UI owns presentation only; runtime lifecycle lives in desktop_controller.py,
+startup orchestration lives in workflows.py, and relay sequencing lives in parley.relay.
 """
 
 import os
@@ -12,9 +12,9 @@ import time
 import tkinter as tk
 from tkinter import messagebox, simpledialog, ttk
 
-from . import core, workflows
+from . import core
+from .desktop_controller import DesktopController
 from .participants import eligible_chatgpt_tabs
-from .relay import RelaySession
 from .relay.engine import (
     TEST_A_REPLY_PREFIX,
     TEST_A_REPLY_SUFFIX,
@@ -82,19 +82,11 @@ class ParleyApp:
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
 
         self._ui_queue = queue.Queue()
-        self._operation_stop = threading.Event()
-        self._startup_thread = None
-        self.session = None
-        self._session_done_seen = False
-        self._seen_transfers = 0
-        self._seen_events = 0
-        self._user_stop_requested = False
-        self._session_started = None
+        self.controller = DesktopController()
         self._diagnostic_lines = []
         self._diagnostic_window = None
         self._diagnostic_text = None
         self._closing = False
-        self._tabs = None
         self._mode = "idle"
         self._participant_tabs = []
         self._participant_tab_map = {}
@@ -1059,11 +1051,6 @@ class ParleyApp:
             )
             return
 
-        self._operation_stop.clear()
-        self._user_stop_requested = False
-        self._session_started = time.monotonic()
-        self._session_done_seen = False
-        self._tabs = None
         self._clear_transcript()
         self.startup_stage.configure(text="Creating participants…")
         self._set_participant("A", "Waiting", MUTED)
@@ -1097,29 +1084,21 @@ class ParleyApp:
         def progress(event):
             self._post(self._startup_progress_event, dict(event))
 
-        def worker():
-            try:
-                result = workflows.prepare_parley_session(
-                    prompt,
-                    participant_specs,
-                    should_stop=self._operation_stop.is_set,
-                    progress=progress,
-                )
-            except Exception as exc:
-                result = {
-                    "ok": False,
-                    "error": "desktop_startup_exception",
-                    "stage": "desktop_startup",
-                    "detail": str(exc),
-                }
-            self._post(self._startup_finished, result, prompt, rounds)
+        def finished(result, completed_prompt, completed_rounds):
+            self._post(
+                self._startup_finished,
+                result,
+                completed_prompt,
+                completed_rounds,
+            )
 
-        self._startup_thread = threading.Thread(
-            target=worker,
-            name="parley-desktop-startup",
-            daemon=False,
+        self.controller.start(
+            prompt,
+            participant_specs,
+            rounds,
+            progress=progress,
+            finished=finished,
         )
-        self._startup_thread.start()
         self._update_controls()
 
     def _startup_progress_event(self, event):
@@ -1208,8 +1187,6 @@ class ParleyApp:
 
     def _startup_finished(self, result, prompt, rounds):
         self.startup_progress.stop()
-        self._startup_thread = None
-
         if not isinstance(result, dict) or not result.get("ok"):
             error = (
                 result.get("error")
@@ -1223,7 +1200,7 @@ class ParleyApp:
             )
             if (
                 error == "chatgpt_wait_stopped"
-                or self._operation_stop.is_set()
+                or self.controller.operation_stop.is_set()
             ):
                 self._diagnostic("Startup cancelled by user")
                 self._update_session_card(
@@ -1256,7 +1233,6 @@ class ParleyApp:
         ):
             tab_a = result["A"]
             tab_b = result["B"]
-            self._tabs = {"A": tab_a, "B": tab_b}
             self._set_participant_identity("A", tab_a)
             self._set_participant_identity("B", tab_b)
             self._set_participant("A", "Reset", SUCCESS)
@@ -1280,7 +1256,6 @@ class ParleyApp:
         tab_a = result["A"]
         tab_b = result["B"]
         initial_text = result.get("initial_response_text") or ""
-        self._tabs = {"A": tab_a, "B": tab_b}
         self._diagnostic(f"Chat A target: {tab_a.get('id')}")
         self._diagnostic(f"Chat B target: {tab_b.get('id')}")
         self._set_participant_identity("A", tab_a)
@@ -1293,17 +1268,11 @@ class ParleyApp:
             _display_reply(initial_text, "A"),
         )
 
-        self.session = RelaySession(
-            workflows.bridge,
-            tab_a["id"],
-            tab_b["id"],
+        self.controller.create_relay_session(
+            result,
+            prompt,
             rounds,
-            include_text=True,
-            initial_context=prompt,
         )
-        self._seen_transfers = 0
-        self._seen_events = 0
-        self._session_done_seen = False
         self._set_participant("A", "Ready", SUCCESS)
         self._set_participant("B", "Ready", SUCCESS)
         self._set_mode("conversation")
@@ -1317,28 +1286,26 @@ class ParleyApp:
         self._diagnostic(
             "Protocol bootstrap complete; relay starting"
         )
-        self.session.start()
+        self.controller.start_relay_session()
         self._update_controls()
 
     def pause_session(self):
-        if self.session and self.session.is_alive():
-            self.session.pause()
+        if self.controller.pause():
             self._diagnostic("Pause requested")
             self._update_controls()
 
     def resume_session(self):
-        if self.session and self.session.is_alive():
-            self.session.resume()
+        if self.controller.resume():
             self._diagnostic("Resume requested")
             self._update_controls()
 
     def continue_one_round(self):
-        if not self.session or not self.session.is_alive():
+        if not self.controller.session_alive:
             return
-        status = self.session.status()
+        status = self.controller.status()
         current = int(status.get("rounds_requested", 0) or 0)
         try:
-            updated = self.session.extend_rounds(current + 1)
+            updated = self.controller.extend_rounds(current + 1)
         except Exception as exc:
             messagebox.showwarning("Parley", str(exc))
             return
@@ -1346,9 +1313,9 @@ class ParleyApp:
         self._update_controls()
 
     def add_rounds(self):
-        if not self.session or not self.session.is_alive():
+        if not self.controller.session_alive:
             return
-        status = self.session.status()
+        status = self.controller.status()
         current = int(status.get("rounds_requested", 0) or 0)
         additional = simpledialog.askinteger(
             "Add Rounds",
@@ -1360,7 +1327,7 @@ class ParleyApp:
         if additional is None:
             return
         try:
-            updated = self.session.extend_rounds(
+            updated = self.controller.extend_rounds(
                 current + additional
             )
         except Exception as exc:
@@ -1370,17 +1337,15 @@ class ParleyApp:
         self._update_controls()
 
     def finish_here(self):
-        if self.session and self.session.is_alive():
-            self.session.finish_at_round_limit()
+        if self.controller.finish_at_round_limit():
             self._diagnostic(
                 "Finish requested at current round boundary"
             )
             self._update_controls()
 
     def stop_session(self):
-        if self._mode == "startup":
-            self._user_stop_requested = True
-            self._operation_stop.set()
+        stopped = self.controller.stop()
+        if stopped == "startup":
             self.startup_stage.configure(
                 text="Stopping after the current safe operation…"
             )
@@ -1392,9 +1357,7 @@ class ParleyApp:
             self._update_controls()
             return
 
-        if self.session and self.session.is_alive():
-            self._user_stop_requested = True
-            self.session.stop()
+        if stopped == "session":
             self.live_badge.configure(
                 text="● STOPPING",
                 fg=WARN,
@@ -1409,22 +1372,9 @@ class ParleyApp:
             self._update_controls()
 
     def new_conversation(self):
-        if self.session and self.session.is_alive():
-            return
-        if (
-            self._startup_thread
-            and self._startup_thread.is_alive()
-        ):
+        if not self.controller.reset():
             return
 
-        self.session = None
-        self._tabs = None
-        self._session_done_seen = False
-        self._seen_transfers = 0
-        self._seen_events = 0
-        self._user_stop_requested = False
-        self._operation_stop.clear()
-        self._session_started = None
         self._clear_transcript()
         self._set_participant("A", "Waiting", MUTED)
         self._set_participant("B", "Waiting", MUTED)
@@ -1448,11 +1398,11 @@ class ParleyApp:
                 self.root.after(self.POLL_MS, self._poll)
 
     def _poll_session(self):
-        session = self.session
-        if not session:
+        snapshot = self.controller.poll()
+        if not snapshot:
             return
 
-        status = session.status()
+        status = snapshot["status"]
         rounds_done = int(
             status.get("rounds_completed", 0) or 0
         )
@@ -1470,7 +1420,7 @@ class ParleyApp:
         )
         if status.get("awaiting_extension"):
             state = "Round complete"
-        if not session.is_alive():
+        if not self.controller.session_alive:
             state = (
                 status.get("status") or "Ended"
             ).title()
@@ -1482,10 +1432,7 @@ class ParleyApp:
             transfers=str(transfers),
         )
 
-        items = session.transfers()
-        while self._seen_transfers < len(items):
-            item = items[self._seen_transfers]
-            self._seen_transfers += 1
+        for item in snapshot["transfers"]:
             direction = item.get("direction")
             label = "B" if direction == "A->B" else "A"
             text = _display_reply(
@@ -1508,10 +1455,7 @@ class ParleyApp:
                     f"hasFocus={activity.get('hasFocus')}"
                 )
 
-        events = session.events()
-        while self._seen_events < len(events):
-            event = events[self._seen_events]
-            self._seen_events += 1
+        for event in snapshot["events"]:
             if event.get("event") in {
                 "relay_round_limit_reached",
                 "relay_round_limit_extended",
@@ -1524,24 +1468,13 @@ class ParleyApp:
                     self._event_summary(event)
                 )
 
-        if (
-            not session.is_alive()
-            and not self._session_done_seen
-        ):
-            self._session_done_seen = True
-            self._session_finished()
+        if snapshot["finished"]:
+            self._session_finished(
+                snapshot["result"],
+                snapshot["exception"],
+            )
 
-    def _session_finished(self):
-        result = (
-            self.session.result
-            if self.session
-            else None
-        )
-        exception = (
-            self.session.exception
-            if self.session
-            else None
-        )
+    def _session_finished(self, result, exception):
 
         if exception is not None:
             self.live_badge.configure(
@@ -1590,7 +1523,7 @@ class ParleyApp:
 
         if (
             status == "stopped"
-            and self._user_stop_requested
+            and self.controller.user_stop_requested
         ):
             headline = "Session stopped by user."
         elif status == "complete":
@@ -1687,13 +1620,7 @@ class ParleyApp:
         self.transcript.configure(state="disabled")
 
     def _tick_elapsed(self):
-        if self._session_started is None:
-            seconds = 0
-        else:
-            seconds = max(
-                0,
-                int(time.monotonic() - self._session_started),
-            )
+        seconds = self.controller.elapsed_seconds()
         minutes, seconds = divmod(seconds, 60)
         hours, minutes = divmod(minutes, 60)
         if hours:
@@ -1707,16 +1634,10 @@ class ParleyApp:
         self.elapsed_value.configure(text=value)
 
     def _update_controls(self):
-        startup_alive = bool(
-            self._startup_thread
-            and self._startup_thread.is_alive()
-        )
-        session_alive = bool(
-            self.session
-            and self.session.is_alive()
-        )
+        startup_alive = self.controller.startup_alive
+        session_alive = self.controller.session_alive
         status = (
-            self.session.status()
+            self.controller.status()
             if session_alive
             else {}
         )
@@ -1778,9 +1699,9 @@ class ParleyApp:
         )
         ended = bool(
             self._mode == "conversation"
-            and self.session
-            and not self.session.is_alive()
-            and self._session_done_seen
+            and self.controller.has_session
+            and not session_alive
+            and self.controller.session_done_seen
         )
         self.new_button.configure(
             state=(
@@ -1791,14 +1712,8 @@ class ParleyApp:
         )
 
     def _on_close(self):
-        startup_alive = bool(
-            self._startup_thread
-            and self._startup_thread.is_alive()
-        )
-        session_alive = bool(
-            self.session
-            and self.session.is_alive()
-        )
+        startup_alive = self.controller.startup_alive
+        session_alive = self.controller.session_alive
         if startup_alive or session_alive:
             if not messagebox.askyesno(
                 "Close Parley",
@@ -1807,12 +1722,7 @@ class ParleyApp:
             ):
                 return
             self._closing = True
-            self._operation_stop.set()
-            if (
-                self.session
-                and self.session.is_alive()
-            ):
-                self.session.stop()
+            self.controller.stop()
             self._finish_close_when_safe()
             return
 
@@ -1820,14 +1730,8 @@ class ParleyApp:
         self.root.destroy()
 
     def _finish_close_when_safe(self):
-        startup_alive = bool(
-            self._startup_thread
-            and self._startup_thread.is_alive()
-        )
-        session_alive = bool(
-            self.session
-            and self.session.is_alive()
-        )
+        startup_alive = self.controller.startup_alive
+        session_alive = self.controller.session_alive
         if startup_alive or session_alive:
             self.root.after(
                 100,

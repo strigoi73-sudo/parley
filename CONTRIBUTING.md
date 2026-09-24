@@ -52,7 +52,8 @@ Use the existing responsibility boundaries rather than putting new behavior into
 - `parley/chatgpt_transactions.py` — strict fail-closed ChatGPT send/wait transaction sequencing.
 - `parley/bootstrap.py` — deterministic protocol provisioning, acknowledgement barrier, and activation orchestration.
 - `parley/relay/` — deterministic A/B sequencing, dedupe, control, state, and audit behavior.
-- `parley/app.py` — supported desktop relay presentation/controller.
+- `parley/app.py` — supported desktop widgets, dialogs, transcript/status rendering, and user interaction.
+- `parley/desktop_controller.py` — non-Tkinter desktop startup/session lifecycle, runtime controls, and polling cursors.
 - `parley/cli.py` — desktop launcher plus lower-level developer/debug commands; do not recreate a second production relay controller here.
 - `parley/protocols/` — canonical runtime Parley A/B protocol files.
 - `tests/` — regression coverage.

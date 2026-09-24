@@ -106,7 +106,8 @@ Before changing behavior, identify which layer owns it.
 - Strict ChatGPT send/wait transaction sequencing → `chatgpt_transactions.py`
 - A/B protocol provisioning/ACK/activation barrier → `bootstrap.py`
 - A/B sequencing, dedupe, control, or audit → `relay/`
-- Desktop relay presentation/controller → `app.py`
+- Desktop widgets, dialogs, and presentation → `app.py`
+- Desktop startup/session lifecycle and polling cursors → `desktop_controller.py`
 - CLI launcher and developer utilities → `cli.py`
 
 See [architecture.md](architecture.md) before moving responsibilities across layers.
