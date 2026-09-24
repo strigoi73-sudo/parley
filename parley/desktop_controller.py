@@ -58,6 +58,15 @@ class DesktopController:
     def session_done_seen(self):
         return self._session_done_seen
 
+    @property
+    def has_session(self):
+        return self.session is not None
+
+    def status(self):
+        if self.session is None:
+            return {}
+        return self.session.status()
+
     def start(self, prompt, participant_specs, rounds, *, progress, finished):
         if self.busy:
             raise RuntimeError("desktop controller is already busy")
