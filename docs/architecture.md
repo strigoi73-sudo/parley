@@ -170,6 +170,20 @@ Produces structured events for diagnosis without requiring full message text.
 
 Defines the explicit relay states used by the engine and UI.
 
+## `parley/desktop_controller.py` — desktop runtime controller
+
+This non-Tkinter layer owns desktop runtime lifecycle:
+
+- asynchronous startup execution and cooperative cancellation;
+- prepared-participant target retention;
+- `RelaySession` construction and start;
+- pause/resume/extend/finish/stop delegation;
+- elapsed runtime tracking;
+- incremental transfer/event cursors;
+- one-time finished-session detection.
+
+It deliberately does not own widgets, dialogs, transcript formatting, colors, or other presentation concerns.
+
 ## `parley/app.py` — desktop presentation
 
 The Tkinter desktop application owns presentation and user interaction.
@@ -181,10 +195,10 @@ It handles:
 - initial prompt and round configuration;
 - startup/status display;
 - transcript presentation;
-- pause/extend/finish/stop controls;
+- user-facing pause/extend/finish/stop controls;
 - diagnostics display.
 
-It should not duplicate workflow or relay-engine logic.
+Runtime startup/session lifecycle is delegated to `desktop_controller.py`; the Tkinter class renders controller state rather than owning relay worker state itself.
 
 ## `parley/cli.py` — launcher and developer utilities
 
