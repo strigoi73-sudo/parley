@@ -4,8 +4,10 @@ parley.core - Pure Chrome DevTools Protocol (CDP) engine.
 This layer is completely site-agnostic. It knows nothing about ChatGPT, Gemini
 or any AI chat UI. It provides:
 
-  * A CDP transport (HTTP tab discovery + WebSocket command channel) with
-    automatic reconnection.
+  * Two CDP transports:
+      - classic: HTTP tab discovery + per-tab WebSocket
+      - live: one persistent browser WebSocket + flattened Target sessions
+    with automatic reconnection.
   * Generic browser-automation primitives that work on ANY website:
     evaluate JS, read DOM text, extract elements, wait for a selector,
     click, type, navigate, and read cookies.
@@ -17,10 +19,19 @@ Build site-specific behaviour on top of this in `parley.adapters` and
 import json
 import os
 import time
+from pathlib import Path
 import urllib.request
 import urllib.error
 
 import websocket
+
+from .live_browser import (
+    LiveTabConnection,
+    chrome_user_data_dir,
+    live_devtools_endpoint,
+    live_target_infos,
+    live_browser_manager,
+)
 
 CDP_HOST = os.environ.get("PARLEY_CDP_HOST", "localhost")
 CDP_PORT = int(os.environ.get("PARLEY_CDP_PORT", "9222"))
@@ -29,6 +40,24 @@ CDP_HTTP = f"http://{CDP_HOST}:{CDP_PORT}"
 # Maximum reconnect attempts for WebSocket connections
 MAX_RECONNECT = 3
 RECONNECT_DELAY = 1
+
+
+# ============================================================================
+# CONNECTION MODE
+# ============================================================================
+
+def connection_mode():
+    """Return the configured transport: classic or live."""
+    mode = os.environ.get(
+        "PARLEY_CONNECTION_MODE",
+        "classic",
+    ).strip().lower()
+    if mode not in ("classic", "live"):
+        raise ValueError(
+            "PARLEY_CONNECTION_MODE must be 'classic' or 'live' "
+            "(got %r)" % mode
+        )
+    return mode
 
 
 # ============================================================================
@@ -53,14 +82,29 @@ def get_ws_url(tab_id):
     return None
 
 
-def cdp_connect(tab_id, retries=MAX_RECONNECT):
-    """Connect to a tab via WebSocket with automatic reconnection."""
+def cdp_connect(tab_id, retries=MAX_RECONNECT, timeout=10):
+    """Connect to a tab using the configured transport."""
+    if connection_mode() == "live":
+        for attempt in range(retries):
+            try:
+                return LiveTabConnection(tab_id, timeout=timeout)
+            except Exception:
+                if attempt < retries - 1:
+                    time.sleep(RECONNECT_DELAY)
+                else:
+                    return None
+        return None
+
     ws_url = get_ws_url(tab_id)
     if not ws_url:
         return None
     for attempt in range(retries):
         try:
-            ws = websocket.create_connection(ws_url, timeout=10, suppress_origin=True)
+            ws = websocket.create_connection(
+                ws_url,
+                timeout=timeout,
+                suppress_origin=True,
+            )
             return ws
         except Exception:
             if attempt < retries - 1:
@@ -74,49 +118,104 @@ def cdp_connect(tab_id, retries=MAX_RECONNECT):
     return None
 
 
-def cdp_send(ws, method, params=None, timeout=10):
-    """Send CDP command and wait for response with timeout."""
+def cdp_send(
+    ws,
+    method,
+    params=None,
+    timeout=10,
+    should_stop=None,
+):
+    """Send one CDP command, optionally without an overall deadline."""
+    command = getattr(ws, "command", None)
+    if callable(command):
+        if callable(should_stop):
+            return command(
+                method,
+                params,
+                timeout=timeout,
+                should_stop=should_stop,
+            )
+        return command(method, params, timeout=timeout)
+
     msg_id = int(time.time() * 1000) % 100000
     msg = {"id": msg_id, "method": method}
     if params:
         msg["params"] = params
     ws.send(json.dumps(msg))
-    ws.settimeout(timeout)
-    deadline = time.time() + timeout
-    while time.time() < deadline:
+    deadline = None if timeout is None else time.monotonic() + timeout
+    poll_timeout = 0.25 if callable(should_stop) else timeout
+    ws.settimeout(poll_timeout)
+
+    while deadline is None or time.monotonic() < deadline:
+        if callable(should_stop) and should_stop():
+            return {"error": "stopped"}
+
         try:
             resp = json.loads(ws.recv())
             if resp.get("id") == msg_id:
-                return resp.get("result", resp.get("error", {}))
+                if "result" in resp:
+                    return resp["result"]
+                if "error" in resp:
+                    return {"error": resp["error"]}
+                return {"error": "malformed CDP response"}
         except websocket.WebSocketTimeoutException:
+            if deadline is None:
+                continue
             break
         except Exception:
             break
     return {"error": "timeout"}
 
 
-def cdp_send_with_retry(ws, method, params=None, timeout=10, tab_id=None, retries=MAX_RECONNECT):
+def cdp_send_with_retry(
+    ws,
+    method,
+    params=None,
+    timeout=10,
+    tab_id=None,
+    retries=MAX_RECONNECT,
+    should_stop=None,
+):
     """Send CDP command with automatic reconnection on failure."""
     for attempt in range(retries):
         try:
-            result = cdp_send(ws, method, params, timeout)
+            result = cdp_send(
+                ws,
+                method,
+                params,
+                timeout,
+                should_stop=should_stop,
+            )
             if "error" not in result:
                 return result
-            # If error and we have retries left, reconnect
+            if result.get("error") == "stopped":
+                return result
+            # If error and we have retries left, reconnect. Live target
+            # handles can reattach in place so callers keep a valid object.
             if attempt < retries - 1 and tab_id:
-                ws.close()
-                ws = cdp_connect(tab_id)
-                if not ws:
-                    return {"error": "reconnect failed"}
+                reconnect = getattr(ws, "reconnect", None)
+                if callable(reconnect):
+                    if not reconnect():
+                        return {"error": "reconnect failed"}
+                else:
+                    ws.close()
+                    ws = cdp_connect(tab_id, timeout=timeout)
+                    if not ws:
+                        return {"error": "reconnect failed"}
         except Exception as e:
             if attempt < retries - 1 and tab_id:
-                try:
-                    ws.close()
-                except Exception:
-                    pass
-                ws = cdp_connect(tab_id)
-                if not ws:
-                    return {"error": "reconnect failed"}
+                reconnect = getattr(ws, "reconnect", None)
+                if callable(reconnect):
+                    if not reconnect():
+                        return {"error": "reconnect failed"}
+                else:
+                    try:
+                        ws.close()
+                    except Exception:
+                        pass
+                    ws = cdp_connect(tab_id, timeout=timeout)
+                    if not ws:
+                        return {"error": "reconnect failed"}
             else:
                 return {"error": str(e)}
     return {"error": "max retries exceeded"}
@@ -137,6 +236,22 @@ def _unwrap(result, default=None):
 
 def list_tabs():
     """Return a list of open page tabs: [{id, title, url}, ...]."""
+    if connection_mode() == "live":
+        try:
+            targets = live_target_infos()
+        except Exception as exc:
+            return {"error": str(exc)}
+
+        return [
+            {
+                "id": target.get("targetId"),
+                "title": target.get("title", "")[:80],
+                "url": target.get("url", ""),
+            }
+            for target in targets
+            if target.get("type") == "page"
+        ]
+
     tabs = http_get("/json/list")
     if isinstance(tabs, dict) and "error" in tabs:
         return tabs
@@ -151,15 +266,119 @@ def list_tabs():
     return result
 
 
+
+def create_tab(url="about:blank"):
+    """Create a new page target and return its tab id.
+
+    Live mode uses the browser-level Target domain so the new tab belongs to
+    the already-running signed-in Chrome profile.
+    """
+    if connection_mode() != "live":
+        return {
+            "ok": False,
+            "error": "create_tab_requires_live_mode",
+        }
+
+    result = live_browser_manager().command(
+        "Target.createTarget",
+        {"url": str(url or "about:blank")},
+        timeout=10,
+    )
+    if not isinstance(result, dict):
+        return {
+            "ok": False,
+            "error": "create_tab_invalid_response",
+            "detail": result,
+        }
+    if result.get("error"):
+        return {
+            "ok": False,
+            "error": "create_tab_failed",
+            "detail": result,
+        }
+
+    target_id = result.get("targetId")
+    if not target_id:
+        return {
+            "ok": False,
+            "error": "create_tab_missing_target_id",
+            "detail": result,
+        }
+
+    return {
+        "ok": True,
+        "id": target_id,
+        "url": str(url or "about:blank"),
+    }
+
+
 def tab_url(tab_id):
-    """Return the current URL of a tab (from the CDP tab list)."""
-    tabs = http_get("/json/list")
+    """Return the current URL of a tab."""
+    tabs = list_tabs()
     if isinstance(tabs, dict) and "error" in tabs:
         return ""
     for tab in tabs:
         if tab.get("id") == tab_id:
             return tab.get("url", "")
     return ""
+
+
+def set_focus_emulation(
+    tab_id,
+    enabled=True,
+    timeout=None,
+    ws=None,
+    should_stop=None,
+):
+    """Simulate a focused/active page without activating its Chrome tab."""
+    own = ws is None
+    if own:
+        ws = cdp_connect(tab_id, timeout=timeout)
+        if not ws:
+            return {
+                "ok": False,
+                "error": "cannot_connect_to_tab",
+                "enabled": bool(enabled),
+            }
+    try:
+        result = cdp_send_with_retry(
+            ws,
+            "Emulation.setFocusEmulationEnabled",
+            {"enabled": bool(enabled)},
+            timeout=timeout,
+            tab_id=tab_id,
+            should_stop=should_stop,
+        )
+        if not isinstance(result, dict):
+            return {
+                "ok": False,
+                "error": "focus_emulation_invalid_response",
+                "enabled": bool(enabled),
+                "detail": result,
+            }
+        if result.get("error") == "stopped":
+            return {
+                "ok": False,
+                "error": "stopped",
+                "enabled": bool(enabled),
+            }
+        if result.get("error"):
+            return {
+                "ok": False,
+                "error": "focus_emulation_failed",
+                "enabled": bool(enabled),
+                "detail": result,
+            }
+        return {
+            "ok": True,
+            "enabled": bool(enabled),
+        }
+    finally:
+        if own:
+            try:
+                ws.close()
+            except Exception:
+                pass
 
 
 def evaluate(tab_id, js, await_promise=False, timeout=10, ws=None):
@@ -169,7 +388,7 @@ def evaluate(tab_id, js, await_promise=False, timeout=10, ws=None):
     """
     own = ws is None
     if own:
-        ws = cdp_connect(tab_id)
+        ws = cdp_connect(tab_id, timeout=timeout)
         if not ws:
             return {"error": "cannot connect to tab"}
     try:
@@ -188,6 +407,98 @@ def evaluate(tab_id, js, await_promise=False, timeout=10, ws=None):
                 ws.close()
             except Exception:
                 pass
+
+
+
+def set_file_input_files(
+    tab_id,
+    file_path,
+    selector='input[type="file"]',
+    timeout=10,
+    should_stop=None,
+):
+    """Set a local file on a page file-input element through CDP.
+
+    This is site-agnostic. The caller is responsible for making the intended
+    file input exist before calling this function.
+    """
+    path = Path(file_path).expanduser().resolve()
+    if not path.is_file():
+        return {
+            "ok": False,
+            "error": "attachment_file_missing",
+            "path": str(path),
+        }
+
+    ws = cdp_connect(tab_id, timeout=timeout)
+    if not ws:
+        return {"ok": False, "error": "cannot connect to tab"}
+
+    try:
+        document = cdp_send_with_retry(
+            ws,
+            "DOM.getDocument",
+            {"depth": -1, "pierce": True},
+            timeout=timeout,
+            tab_id=tab_id,
+            should_stop=should_stop,
+        )
+        if document.get("error") == "stopped":
+            return {"ok": False, "error": "stopped"}
+        root_id = (document.get("root") or {}).get("nodeId")
+        if not root_id:
+            return {
+                "ok": False,
+                "error": "dom_document_unavailable",
+                "detail": document,
+            }
+
+        query = cdp_send_with_retry(
+            ws,
+            "DOM.querySelector",
+            {"nodeId": root_id, "selector": selector},
+            timeout=timeout,
+            tab_id=tab_id,
+            should_stop=should_stop,
+        )
+        if query.get("error") == "stopped":
+            return {"ok": False, "error": "stopped"}
+        node_id = query.get("nodeId")
+        if not node_id:
+            return {
+                "ok": False,
+                "error": "file_input_not_found",
+                "selector": selector,
+            }
+
+        result = cdp_send_with_retry(
+            ws,
+            "DOM.setFileInputFiles",
+            {"files": [str(path)], "nodeId": node_id},
+            timeout=timeout,
+            tab_id=tab_id,
+            should_stop=should_stop,
+        )
+        if result.get("error") == "stopped":
+            return {"ok": False, "error": "stopped"}
+        if result.get("error"):
+            return {
+                "ok": False,
+                "error": "set_file_input_files_failed",
+                "detail": result,
+            }
+
+        return {
+            "ok": True,
+            "path": str(path),
+            "filename": path.name,
+            "selector": selector,
+        }
+    finally:
+        try:
+            ws.close()
+        except Exception:
+            pass
 
 
 def _js_str(s):

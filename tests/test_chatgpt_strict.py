@@ -6,6 +6,7 @@ from parley.adapters.chatgpt import ChatGPTAdapter
 from parley.adapters.chatgpt_strict import (
     CHATGPT_GET_MSG_COUNT_JS,
     CHATGPT_GET_RESPONSE_JS,
+    CHATGPT_GET_TURN_STATE_JS,
 )
 from parley.adapters.js import (
     UNIVERSAL_GET_MSG_COUNT,
@@ -50,13 +51,82 @@ class StrictChatGPTExtractorTests(unittest.TestCase):
         )
         self.assertIn("not_chatgpt_page", CHATGPT_GET_RESPONSE_JS)
 
-    def test_current_and_role_based_turn_structures_are_supported(self):
-        for selector in (
-            'article[data-turn="assistant"]',
-            '[data-message-author-role="assistant"]',
+    def test_turn_state_exposes_explicit_latest_user_turn(self):
+        self.assertIn(
+            'const articleSelector = \'article[data-turn="\' + roleName + \'"]\';',
+            CHATGPT_GET_TURN_STATE_JS,
+        )
+        self.assertIn(
+            'const roleSelector = \'[data-message-author-role="\' + roleName + \'"]\';',
+            CHATGPT_GET_TURN_STATE_JS,
+        )
+        self.assertIn(
+            "const userTurns = collectTurns('user');",
+            CHATGPT_GET_TURN_STATE_JS,
+        )
+        self.assertIn(
+            "const user = latestTurn(userTurns, 'user');",
+            CHATGPT_GET_TURN_STATE_JS,
+        )
+        self.assertNotIn("document.body.innerText", CHATGPT_GET_TURN_STATE_JS)
+
+    def test_turn_state_exposes_renderer_activity(self):
+        for token in (
+            "visibilityState:document.visibilityState",
+            "hidden:!!document.hidden",
+            "hasFocus:document.hasFocus()",
         ):
-            self.assertIn(selector, CHATGPT_GET_RESPONSE_JS)
-            self.assertIn(selector, CHATGPT_GET_MSG_COUNT_JS)
+            self.assertIn(token, CHATGPT_GET_TURN_STATE_JS)
+            self.assertIn(token, CHATGPT_GET_RESPONSE_JS)
+
+    def test_user_turn_prefers_message_body_over_role_wrapper(self):
+        self.assertIn(
+            "role.querySelector('.whitespace-pre-wrap')",
+            CHATGPT_GET_TURN_STATE_JS,
+        )
+        self.assertIn(
+            "role.querySelector('[class*=\"whitespace-pre-wrap\"]')",
+            CHATGPT_GET_TURN_STATE_JS,
+        )
+        self.assertIn(
+            "role.querySelector('[class*=\"break-words\"]')",
+            CHATGPT_GET_TURN_STATE_JS,
+        )
+
+    def test_mixed_turn_structures_are_merged_in_dom_order(self):
+        for script in (
+            CHATGPT_GET_RESPONSE_JS,
+            CHATGPT_GET_MSG_COUNT_JS,
+            CHATGPT_GET_TURN_STATE_JS,
+        ):
+            self.assertIn("collectTurns", script)
+            self.assertIn("compareDocumentPosition", script)
+            self.assertIn("role.closest(articleSelector)", script)
+            self.assertNotIn("role.closest('article')", script)
+
+        self.assertNotIn(
+            "assistantArticles.length || assistantRoles.length",
+            CHATGPT_GET_TURN_STATE_JS,
+        )
+        self.assertNotIn(
+            "userArticles.length || userRoles.length",
+            CHATGPT_GET_TURN_STATE_JS,
+        )
+
+    def test_current_and_role_based_turn_structures_are_supported(self):
+        for script in (
+            CHATGPT_GET_RESPONSE_JS,
+            CHATGPT_GET_MSG_COUNT_JS,
+        ):
+            self.assertIn(
+                'const articleSelector = \'article[data-turn="\' + roleName + \'"]\';',
+                script,
+            )
+            self.assertIn(
+                'const roleSelector = \'[data-message-author-role="\' + roleName + \'"]\';',
+                script,
+            )
+            self.assertIn("collectTurns('assistant')", script)
 
 
 class WorkflowRoutingTests(unittest.TestCase):
@@ -104,6 +174,49 @@ class WorkflowRoutingTests(unittest.TestCase):
         self.assertNotEqual(response_js, UNIVERSAL_GET_RESPONSE)
         self.assertNotEqual(count_js, UNIVERSAL_GET_MSG_COUNT)
 
+    def test_read_turn_state_uses_strict_chatgpt_script(self):
+        expected = {
+            "ok": True,
+            "source": "chatgpt-strict",
+            "user_count": 1,
+            "assistant_count": 1,
+        }
+
+        ws = mock.Mock()
+        with mock.patch.object(
+            workflows.core,
+            "tab_url",
+            return_value="https://chatgpt.com/c/test",
+        ), mock.patch.object(
+            workflows,
+            "cdp_connect",
+            return_value=ws,
+        ), mock.patch.object(
+            workflows.core,
+            "set_focus_emulation",
+            return_value={"ok": True, "enabled": True},
+        ) as focus, mock.patch.object(
+            workflows.core,
+            "evaluate",
+            return_value=expected,
+        ) as evaluate:
+            result = workflows.read_turn_state("tab-a")
+
+        self.assertEqual(result, expected)
+        focus.assert_called_once_with(
+            "tab-a",
+            True,
+            timeout=None,
+            ws=ws,
+        )
+        evaluate.assert_called_once_with(
+            "tab-a",
+            CHATGPT_GET_TURN_STATE_JS,
+            timeout=None,
+            ws=ws,
+        )
+        ws.close.assert_called_once()
+
     def test_read_response_uses_strict_chatgpt_script(self):
         expected = {
             "ok": True,
@@ -112,11 +225,20 @@ class WorkflowRoutingTests(unittest.TestCase):
             "source": "chatgpt-strict",
         }
 
+        ws = mock.Mock()
         with mock.patch.object(
             workflows.core,
             "tab_url",
             return_value="https://chatgpt.com/c/test",
         ), mock.patch.object(
+            workflows,
+            "cdp_connect",
+            return_value=ws,
+        ), mock.patch.object(
+            workflows.core,
+            "set_focus_emulation",
+            return_value={"ok": True, "enabled": True},
+        ) as focus, mock.patch.object(
             workflows.core,
             "evaluate",
             return_value=expected,
@@ -124,7 +246,19 @@ class WorkflowRoutingTests(unittest.TestCase):
             result = workflows.read_response("tab-a")
 
         self.assertEqual(result, expected)
-        evaluate.assert_called_once_with("tab-a", CHATGPT_GET_RESPONSE_JS)
+        focus.assert_called_once_with(
+            "tab-a",
+            True,
+            timeout=None,
+            ws=ws,
+        )
+        evaluate.assert_called_once_with(
+            "tab-a",
+            CHATGPT_GET_RESPONSE_JS,
+            timeout=None,
+            ws=ws,
+        )
+        ws.close.assert_called_once()
 
     def test_robust_send_snapshots_previous_text_with_strict_script(self):
         ws = mock.Mock()

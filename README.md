@@ -77,7 +77,8 @@ $ python3 parley.py cookies <gemini_tab> gemini.google.com
 - **Reliable streaming detection** — a `MutationObserver` returns the response only once it stops changing, so you never grab a partial answer.
 - **AI-to-AI bridging** — relay a conversation between two tabs (e.g. ChatGPT ↔ Gemini) for N rounds.
 - **Self-healing** — auto-reconnects dropped CDP sockets and recovers Gemini's "stuck send button" state via a targeted reload that preserves history.
-- **Three ways to use it** — a plain CLI, an [MCP](https://modelcontextprotocol.io) server (Claude Desktop / Cursor / opencode / any MCP client), and a native opencode plugin.
+- **Desktop app** — start a fresh A/B conversation from one prompt, watch startup progress and the live transcript, then pause, extend, finish, or stop cleanly.
+- **Four ways to use it** — desktop app, CLI, an [MCP](https://modelcontextprotocol.io) server, and a native opencode plugin.
 - **Zero heavy deps** — one small dependency (`websocket-client`). No Playwright, no Puppeteer, no headless Chrome download.
 
 ### Generic Automation (any website)
@@ -124,6 +125,7 @@ Parley is organized in three layers so the generic engine stays independent of a
 
 ```
 parley/
+├── app.py             Desktop presentation over shared workflows/session APIs.
 ├── core.py            Core CDP engine — connection, DOM, JS eval, input,
 │                      navigation, wait_for, cookies. Knows nothing about AI sites.
 ├── adapters/          Per-site knowledge (selectors, quirks)
@@ -148,30 +150,66 @@ cd parley
 pip install -r requirements.txt
 ```
 
-### 1. Start your browser with CDP enabled
+### 1. Enable live debugging in your normal Chrome
 
-Parley talks to a browser that has remote debugging turned on. Use the helper:
+For the primary two-ChatGPT relay workflow, Parley attaches to your already-running,
+signed-in Chrome session.
 
-```bash
-./scripts/start-browser.sh
+Open:
+
+```text
+chrome://inspect/#remote-debugging
 ```
 
-Or launch it yourself (re-uses your normal profile, so you stay logged in):
+Enable remote debugging there. Chrome may ask you to approve Parley's connection
+when the process first attaches. Parley keeps one browser-level debugging
+connection open for that process so normal relay operation does not reconnect
+for every message.
 
-```bash
-brave-browser --remote-debugging-port=9222 --remote-allow-origins=*
-# or: google-chrome --remote-debugging-port=9222 --remote-allow-origins=*
-```
-
-Open tabs for the AIs you want to use (ChatGPT, Gemini, ...) and sign in.
+Open the two ChatGPT conversations you want to use.
 
 ### 2. Try it
 
-```bash
-python3 parley.py list
+```powershell
+python .\parley.py chats
 ```
 
-You should see your open tabs with their IDs.
+The `chats` and `relay` commands use live mode by default and should show
+your existing signed-in ChatGPT tabs.
+
+### 3. Launch the desktop app
+
+On Windows:
+
+```powershell
+.\scripts\start-parley.ps1
+```
+
+or directly:
+
+```powershell
+python .\parley.py app
+```
+
+The desktop app lets you choose each participant independently. A and B can each
+use either a **Fresh chat** or an eligible **Existing chat** already open in the
+connected Chrome session, so existing/existing, existing/fresh, fresh/existing,
+and fresh/fresh setups are all supported. Enter a conversation prompt and round
+count, choose the participant sources, then **Start Parley**. Parley creates any
+fresh participants, provisions and activates the A/B protocols, sends the initial
+prompt to A, and starts the relay. Low-level target IDs and workflow events are
+available from **Diagnostics** rather than occupying the main UI.
+
+### Classic compatibility mode
+
+The inherited localhost CDP transport is still available for generic automation:
+
+```bash
+./scripts/start-browser.sh
+python3 parley.py --classic list
+```
+
+You can also force live mode for another command with `--live`.
 
 ## Usage (CLI)
 
@@ -189,11 +227,43 @@ Start an interactive relay by choosing the tabs when prompted:
 python .\parley.py relay --rounds 3
 ```
 
+For the full production bootstrap, add `--initialize`. This performs
+barriered protocol-file provisioning before the relay begins:
+
+```powershell
+python .\parley.py relay --initialize --rounds 3
+```
+
+On Windows, the versioned production launcher wraps that workflow:
+
+```powershell
+.\scripts\parley-live-relay-v1.ps1 -Rounds 3
+```
+
 Or supply either the displayed numbers or exact tab IDs:
 
 ```powershell
 python .\parley.py relay 1 2 --rounds 3
 ```
+
+Fresh participants can also be selected per role during protocol initialization:
+
+```powershell
+# Fresh A, existing B selected from the open-tab list
+python .\parley.py relay --fresh-a --initialize --rounds 3
+
+# Existing A, fresh B
+python .\parley.py relay --fresh-b --initialize --rounds 3
+
+# Fresh A with a specific existing B target
+python .\parley.py relay EXISTING_B_TAB_ID --fresh-a --initialize --rounds 3
+
+# Both fresh (backward-compatible shorthand)
+python .\parley.py relay --fresh-chats --initialize --rounds 3
+```
+
+The Windows launcher exposes the same mixed setup with `-FreshA`, `-FreshB`,
+and `-FreshChats`.
 
 While the relay runs, enter a command and press Enter:
 
@@ -309,8 +379,10 @@ python3 parley.py bridge <CHATGPT_ID> <GEMINI_ID> 4
 
 ## Troubleshooting
 
-- **`list` returns an error / empty** — the browser is not running with `--remote-debugging-port=9222`, or a different app is on that port. Restart via `scripts/start-browser.sh`.
-- **403 on connect** — make sure you launched with `--remote-allow-origins=*`.
+- **`chats` / `relay` cannot find live Chrome** — open `chrome://inspect/#remote-debugging` in your normal Chrome and enable remote debugging. If Chrome uses a nonstandard user-data directory, set `PARLEY_CHROME_USER_DATA_DIR`.
+- **Chrome shows "Allow remote debugging?"** — approve it only when you intentionally started Parley. One Parley process keeps one browser-level connection open, so you should not need to approve every relay message.
+- **Classic `list` returns an error / empty** — classic mode expects a browser launched with `--remote-debugging-port=9222`. Use `scripts/start-browser.sh`, or use `--live` instead.
+- **Classic mode gets 403 on connect** — make sure the separately launched browser allows the requested DevTools origin.
 - **Response looks empty or truncated** — the model may still be generating; prefer `send-wait` / `wait-stream`, which wait for completion.
 - **Gemini stops responding after a while** — Parley auto-recovers by reloading the tab (history is preserved). If it persists, reload the Gemini tab manually.
 - **Only the first message works on a service** — you are likely using it logged-out/anonymous (rate-limited). Sign in for full use.

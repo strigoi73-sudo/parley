@@ -16,7 +16,9 @@ AI automation:
 Every function returns plain dicts/values; printing/formatting is the CLI's job.
 """
 
+import json
 import time
+from pathlib import Path
 
 from . import core
 from .core import cdp_connect, cdp_send, cdp_send_with_retry
@@ -30,6 +32,95 @@ from .adapters.js import (
     GEMINI_STUCK_STATE_JS,
     make_mutation_observer_js,
 )
+from .relay.engine import (
+    TEST_A_REPLY_PREFIX,
+    TEST_A_REPLY_SUFFIX,
+    TEST_B_REPLY_PREFIX,
+    TEST_B_REPLY_SUFFIX,
+    RESET_CHAT_COMMAND,
+)
+
+
+_PARLEY_PROTOCOL_DIR = Path(__file__).resolve().parent / "protocols"
+_PARLEY_PROTOCOL_WAIT_TIMEOUT_MS = 120000
+_PARLEY_ATTACHMENT_TIMEOUT_MS = 30000
+_PARLEY_ATTACHMENT_STABILIZE_SECONDS = 8.0
+_FRESH_CHATGPT_URL = "https://chatgpt.com/"
+_FRESH_CHAT_READY_TIMEOUT_MS = 30000
+_FRESH_CHAT_INITIAL_PROMPT = "INITIAL PROMPT.  DO NOT REPLY."
+_FRESH_CHAT_INIT_TIMEOUT_MS = 30000
+_FRESH_CHAT_IDLE_STABLE_SECONDS = 1.0
+_PARLEY_PROTOCOLS = {
+    "A": {
+        "filename": "PARLEY_TEST_CHAT_A_PROTOCOL.md",
+        "ack": "PARLEY PROTOCOL A RECEIVED",
+        "activation": "INITIALIZE PARLEY TEST CHAT A",
+        "reply_prefix": TEST_A_REPLY_PREFIX,
+        "reply_suffix": TEST_A_REPLY_SUFFIX,
+    },
+    "B": {
+        "filename": "PARLEY_TEST_CHAT_B_PROTOCOL.md",
+        "ack": "PARLEY PROTOCOL B RECEIVED",
+        "activation": "INITIALIZE PARLEY TEST CHAT B",
+        "reply_prefix": TEST_B_REPLY_PREFIX,
+        "reply_suffix": TEST_B_REPLY_SUFFIX,
+    },
+}
+
+_CHATGPT_REVEAL_FILE_INPUT_JS = r"""
+(() => {
+    const existing = document.querySelector('input#upload-files');
+    if (existing) return {ok: true, action: 'existing-input'};
+
+    const visible = (el) => {
+        if (!el) return false;
+        const rect = el.getBoundingClientRect();
+        const style = window.getComputedStyle(el);
+        return (
+            rect.width > 0 &&
+            rect.height > 0 &&
+            style.display !== 'none' &&
+            style.visibility !== 'hidden'
+        );
+    };
+
+    const items = Array.from(
+        document.querySelectorAll('button,[role="button"],[role="menuitem"]')
+    ).filter(visible);
+
+    const textFor = (el) => [
+        el.getAttribute('aria-label') || '',
+        el.getAttribute('title') || '',
+        el.getAttribute('data-testid') || '',
+        el.innerText || '',
+        el.textContent || '',
+    ].join(' ').trim();
+
+    const fileItem = items.find((el) => {
+        const text = textFor(el);
+        return /(upload|attach|add).*(file|photo)|(file|photo).*(upload|attach|add)/i.test(text);
+    });
+    if (fileItem) {
+        fileItem.click();
+        return {ok: true, action: 'clicked-file-control', label: textFor(fileItem)};
+    }
+
+    const plus = items.find((el) => {
+        const text = textFor(el);
+        return (
+            el.getAttribute('data-testid') === 'composer-plus-btn' ||
+            /^(add|attach|\+|more)$/i.test(text) ||
+            /add.*(photo|file)|attach/i.test(text)
+        );
+    });
+    if (plus) {
+        plus.click();
+        return {ok: true, action: 'clicked-composer-control', label: textFor(plus)};
+    }
+
+    return {ok: false, error: 'chatgpt_file_control_unavailable'};
+})()
+"""
 
 
 _UNKNOWN_TAB_RESPONSE_JS = """
@@ -60,6 +151,62 @@ def _adapter_for_tab(tab_id):
     return detect(url)
 
 
+def _chatgpt_page_activity(value):
+    """Normalize renderer visibility/focus evidence from strict ChatGPT state."""
+    if not isinstance(value, dict):
+        return None
+    if not any(
+        key in value
+        for key in ("visibilityState", "hidden", "hasFocus")
+    ):
+        return None
+    return {
+        "visibilityState": value.get("visibilityState"),
+        "hidden": value.get("hidden"),
+        "hasFocus": value.get("hasFocus"),
+    }
+
+
+def _chatgpt_focused_eval(tab_id, expression):
+    """Evaluate ChatGPT state while renderer focus emulation is asserted."""
+    ws = cdp_connect(tab_id, timeout=None)
+    if not ws:
+        return {
+            "ok": False,
+            "error": "cannot_connect_to_tab",
+        }
+    try:
+        focus = core.set_focus_emulation(
+            tab_id,
+            True,
+            timeout=None,
+            ws=ws,
+        )
+        if not focus.get("ok"):
+            return {
+                "ok": False,
+                "error": "chatgpt_focus_emulation_failed",
+                "detail": focus,
+            }
+        value = core.evaluate(
+            tab_id,
+            expression,
+            timeout=None,
+            ws=ws,
+        )
+        if isinstance(value, dict) and value.get("ok"):
+            value = dict(value)
+            activity = _chatgpt_page_activity(value)
+            if activity is not None:
+                value["page_activity"] = activity
+        return value
+    finally:
+        try:
+            ws.close()
+        except Exception:
+            pass
+
+
 def _response_js(tab_id):
     """Return the site-specific response extractor for this tab.
 
@@ -83,8 +230,30 @@ def _message_count_js(tab_id):
 
 def read_response(tab_id):
     """Return the latest AI response object {text, source, hasStreaming, ...}."""
-    val = core.evaluate(tab_id, _response_js(tab_id))
-    return val
+    adapter = _adapter_for_tab(tab_id)
+    if adapter is not None and adapter.name == "chatgpt":
+        return _chatgpt_focused_eval(
+            tab_id,
+            adapter.response_js,
+        )
+    return core.evaluate(
+        tab_id,
+        _response_js(tab_id),
+        timeout=None,
+    )
+
+
+def read_turn_state(tab_id):
+    """Return strict ChatGPT user/assistant turn state for relay checks."""
+    adapter = _adapter_for_tab(tab_id)
+    if adapter is None:
+        return {"ok": False, "error": "tab_url_unavailable"}
+    if adapter.name != "chatgpt":
+        return {"ok": False, "error": "chatgpt_adapter_required"}
+    return _chatgpt_focused_eval(
+        tab_id,
+        adapter.turn_state_js,
+    )
 
 
 def robust_send(ws, tab_id, text):
@@ -109,7 +278,7 @@ def robust_send(ws, tab_id, text):
         except Exception:
             pass
         time.sleep(7)  # Wait for reload + Angular re-init (conversation preserved)
-        ws = cdp_connect(tab_id)
+        ws = cdp_connect(tab_id, timeout=None)
         reloaded = True
 
     # Step 1: Focus input + select all existing content (so insertText replaces it)
@@ -177,8 +346,23 @@ def send(tab_id, text):
     if not ws:
         return {"error": "cannot connect to tab"}
     try:
+        adapter = _adapter_for_tab(tab_id)
+        if adapter is not None and adapter.name == "chatgpt":
+            focus = core.set_focus_emulation(
+                tab_id,
+                True,
+                timeout=None,
+                ws=ws,
+            )
+            if not focus.get("ok"):
+                return {
+                    "error": "chatgpt_focus_emulation_failed",
+                    "detail": focus,
+                }
         result, ws = robust_send(ws, tab_id, text)
         result["ok"] = True
+        if adapter is not None and adapter.name == "chatgpt":
+            result["focus_emulation"] = True
         return result
     finally:
         try:
@@ -286,12 +470,21 @@ def _runtime_value(result):
     return None
 
 
-def _chatgpt_eval(ws, expression):
+def _chatgpt_eval(ws, expression, should_stop=None):
     """Evaluate strict ChatGPT JS on an existing target connection."""
-    raw = cdp_send(ws, "Runtime.evaluate", {
-        "expression": expression,
-        "returnByValue": True,
-    })
+    raw = cdp_send(
+        ws,
+        "Runtime.evaluate",
+        {
+            "expression": expression,
+            "returnByValue": True,
+        },
+        timeout=None,
+        should_stop=should_stop,
+    )
+    if isinstance(raw, dict) and raw.get("error") == "stopped":
+        return {"ok": False, "error": "stopped"}
+
     value = _runtime_value(raw)
     if not isinstance(value, dict):
         return {
@@ -302,9 +495,13 @@ def _chatgpt_eval(ws, expression):
     return value
 
 
-def _chatgpt_state(ws, adapter):
+def _chatgpt_state(ws, adapter, should_stop=None):
     """Read deterministic ChatGPT turn state on the existing connection."""
-    state = _chatgpt_eval(ws, adapter.turn_state_js)
+    state = _chatgpt_eval(
+        ws,
+        adapter.turn_state_js,
+        should_stop=should_stop,
+    )
     if not state.get("ok"):
         return state
     if "assistant_count" not in state or "user_count" not in state:
@@ -339,12 +536,1367 @@ def _chatgpt_has_new_assistant(pre_state, current_state):
     return False
 
 
+def _normalize_chatgpt_text(value):
+    """Normalize rendered chat text for deterministic equality checks."""
+    return " ".join(str(value or "").split())
+
+
+def _chatgpt_has_new_user(pre_state, current_state, expected_text):
+    """Return True only when the submitted user turn can be proven."""
+    current = current_state.get("user")
+    previous = pre_state.get("user")
+    expected = _normalize_chatgpt_text(expected_text)
+
+    if isinstance(current, dict):
+        current_text = _normalize_chatgpt_text(current.get("text"))
+        if expected and current_text != expected:
+            return False
+
+        current_id = current.get("turn_id")
+        previous_id = (
+            previous.get("turn_id")
+            if isinstance(previous, dict)
+            else None
+        )
+
+        if current_id and previous_id and current_id != previous_id:
+            return True
+
+        if previous is None:
+            return True
+
+        previous_text = _normalize_chatgpt_text(previous.get("text"))
+        if current_text and current_text != previous_text:
+            return True
+
+        pre_count = int(pre_state.get("user_count", 0) or 0)
+        current_count = int(current_state.get("user_count", 0) or 0)
+        if current_count > pre_count and current_text:
+            return True
+
+        return False
+
+    # Backward-compatible fallback for state producers without explicit
+    # user-turn metadata. Current ChatGPT strict state does provide it.
+    pre_count = int(pre_state.get("user_count", 0) or 0)
+    current_count = int(current_state.get("user_count", 0) or 0)
+    return current_count > pre_count
+
+
+def _chatgpt_same_user_turn(expected_state, current_state):
+    """Return True when both states refer to the same latest user turn."""
+    expected = expected_state.get("user")
+    current = current_state.get("user")
+
+    if isinstance(expected, dict) and isinstance(current, dict):
+        expected_id = expected.get("turn_id")
+        current_id = current.get("turn_id")
+        expected_text = _normalize_chatgpt_text(expected.get("text"))
+        current_text = _normalize_chatgpt_text(current.get("text"))
+        expected_count = int(expected_state.get("user_count", 0) or 0)
+        current_count = int(current_state.get("user_count", 0) or 0)
+
+        if expected_id and current_id and expected_id == current_id:
+            return True
+
+        if expected_text and current_text and expected_text == current_text:
+            # React may replace the same rendered user turn under a different
+            # DOM identity while transient duplicate nodes disappear. A
+            # non-increasing count plus identical normalized text is safe to
+            # treat as the same submitted turn.
+            return current_count <= expected_count
+
+        return False
+
+    if expected is None and current is None:
+        return int(expected_state.get("user_count", 0) or 0) == int(
+            current_state.get("user_count", 0) or 0
+        )
+
+    return False
+
+
+
+
+def _snapshot_chatgpt_state(tab_id, adapter=None, should_stop=None):
+    """Capture strict ChatGPT turn state before mutating the composer."""
+    if adapter is None:
+        adapter = _adapter_for_tab(tab_id)
+    if adapter is None or adapter.name != "chatgpt":
+        return {
+            "ok": False,
+            "error": "chatgpt_adapter_required",
+        }
+
+    ws = cdp_connect(tab_id, timeout=None)
+    if not ws:
+        return {
+            "ok": False,
+            "error": "cannot_connect_to_tab",
+        }
+
+    try:
+        focus = core.set_focus_emulation(
+            tab_id,
+            True,
+            timeout=None,
+            ws=ws,
+            should_stop=should_stop,
+        )
+        if not focus.get("ok"):
+            return {
+                "ok": False,
+                "error": "chatgpt_focus_emulation_failed",
+                "detail": focus,
+            }
+        return _chatgpt_state(
+            ws,
+            adapter,
+            should_stop=should_stop,
+        )
+    finally:
+        try:
+            ws.close()
+        except Exception:
+            pass
+
+
+def _chatgpt_attachment_ready_js(filename):
+    """Return JS that confirms the selected file is represented in the composer."""
+    name = json.dumps(str(filename))
+    return f"""
+(() => {{
+    const name = {name};
+    const composer = document.querySelector('#prompt-textarea');
+    const root = (
+        (composer && composer.closest('form')) ||
+        (composer && composer.parentElement && composer.parentElement.parentElement) ||
+        document.body
+    );
+
+    const exactText = Array.from(root.querySelectorAll('*')).some((el) => {{
+        if (el.children.length) return false;
+        return (el.textContent || '').trim() === name;
+    }});
+
+    const namedAttribute = Array.from(
+        root.querySelectorAll('[title],[aria-label]')
+    ).some((el) => {{
+        const title = el.getAttribute('title') || '';
+        const aria = el.getAttribute('aria-label') || '';
+        return title.includes(name) || aria.includes(name);
+    }});
+
+    const uploadInput = document.querySelector('input#upload-files');
+    const selected = !!(
+        uploadInput &&
+        Array.from(uploadInput.files || []).some(
+            (file) => file.name === name
+        )
+    );
+
+    return {{
+        ok: exactText || namedAttribute,
+        filename: name,
+        exactText,
+        namedAttribute,
+        selected,
+    }};
+}})()
+"""
+
+
+def attach_chatgpt_file(
+    tab_id,
+    file_path,
+    timeout_ms=_PARLEY_ATTACHMENT_TIMEOUT_MS,
+    should_stop=None,
+):
+    """Attach one local file to the ChatGPT composer and verify its UI chip."""
+    adapter = _adapter_for_tab(tab_id)
+    if adapter is None or adapter.name != "chatgpt":
+        return {"ok": False, "error": "chatgpt_adapter_required"}
+
+    focus = core.set_focus_emulation(
+        tab_id,
+        True,
+        timeout=None,
+        should_stop=should_stop,
+    )
+    if not focus.get("ok"):
+        return {
+            "ok": False,
+            "error": "chatgpt_focus_emulation_failed",
+            "stage": "focus_emulation",
+            "detail": focus,
+        }
+
+    path = Path(file_path).expanduser().resolve()
+    if not path.is_file():
+        return {
+            "ok": False,
+            "error": "attachment_file_missing",
+            "path": str(path),
+        }
+
+    started = time.monotonic()
+    deadline = started + (timeout_ms / 1000.0)
+    last_detail = None
+
+    while time.monotonic() < deadline:
+        if callable(should_stop) and should_stop():
+            return {"ok": False, "error": "chatgpt_wait_stopped"}
+
+        set_result = core.set_file_input_files(
+            tab_id,
+            str(path),
+            selector="input#upload-files",
+            timeout=5,
+            should_stop=should_stop,
+        )
+        last_detail = set_result
+        if set_result.get("ok"):
+            break
+        if set_result.get("error") == "stopped":
+            return {"ok": False, "error": "chatgpt_wait_stopped"}
+        if set_result.get("error") != "file_input_not_found":
+            return {
+                "ok": False,
+                "error": set_result.get(
+                    "error",
+                    "chatgpt_file_attachment_failed",
+                ),
+                "stage": "select_file",
+                "detail": set_result,
+            }
+
+        last_detail = core.evaluate(
+            tab_id,
+            _CHATGPT_REVEAL_FILE_INPUT_JS,
+            timeout=5,
+        )
+        time.sleep(0.2)
+    else:
+        return {
+            "ok": False,
+            "error": "chatgpt_file_input_timeout",
+            "stage": "locate_file_input",
+            "detail": last_detail,
+        }
+
+    ready_js = _chatgpt_attachment_ready_js(path.name)
+    while time.monotonic() < deadline:
+        if callable(should_stop) and should_stop():
+            return {"ok": False, "error": "chatgpt_wait_stopped"}
+
+        ready = core.evaluate(tab_id, ready_js, timeout=5)
+        last_detail = ready
+        if isinstance(ready, dict) and ready.get("ok"):
+            return {
+                "ok": True,
+                "path": str(path),
+                "filename": path.name,
+                "duration_ms": int(
+                    (time.monotonic() - started) * 1000
+                ),
+                "evidence": ready,
+            }
+        time.sleep(0.2)
+
+    return {
+        "ok": False,
+        "error": "chatgpt_attachment_ready_timeout",
+        "stage": "verify_attachment",
+        "filename": path.name,
+        "detail": last_detail,
+    }
+
+
+
+def _wait_protocol_attachment_stable(
+    should_stop=None,
+    seconds=_PARLEY_ATTACHMENT_STABILIZE_SECONDS,
+):
+    """Hold a short interruptible barrier after ChatGPT renders an attachment."""
+    deadline = time.monotonic() + max(0.0, float(seconds))
+    while time.monotonic() < deadline:
+        if callable(should_stop) and should_stop():
+            return False
+        time.sleep(min(0.1, max(0.0, deadline - time.monotonic())))
+    return not (callable(should_stop) and should_stop())
+
+
+def _parley_protocol_active(tab_id, spec):
+    """Return True if this conversation already contains a marked protocol reply."""
+    prefix = json.dumps(spec["reply_prefix"])
+    suffix = json.dumps(spec["reply_suffix"])
+    expression = f"""
+(() => {{
+    const prefix = {prefix};
+    const suffix = {suffix};
+    const nodes = Array.from(document.querySelectorAll(
+        'article[data-turn="assistant"],[data-message-author-role="assistant"]'
+    ));
+    const seen = nodes.some((node) => {{
+        const text = (node.innerText || node.textContent || '').trim();
+        return text.startsWith(prefix) && text.endsWith(suffix);
+    }});
+    return {{ok: true, seen}};
+}})()
+"""
+    result = core.evaluate(tab_id, expression, timeout=5)
+    return bool(isinstance(result, dict) and result.get("ok") and result.get("seen"))
+
+
+
+
+def _initiate_fresh_chatgpt_tab(
+    tab_id,
+    *,
+    prompt=_FRESH_CHAT_INITIAL_PROMPT,
+    timeout_ms=_FRESH_CHAT_INIT_TIMEOUT_MS,
+    idle_stable_seconds=_FRESH_CHAT_IDLE_STABLE_SECONDS,
+):
+    """Submit the seed prompt and wait for a stable /c/ conversation."""
+    send_result = send(tab_id, prompt)
+    if not isinstance(send_result, dict) or send_result.get("error"):
+        return {
+            "ok": False,
+            "error": (
+                send_result.get("error")
+                if isinstance(send_result, dict)
+                else "fresh_chat_initial_send_failed"
+            ) or "fresh_chat_initial_send_failed",
+            "stage": "send_initial_prompt",
+            "detail": send_result,
+        }
+
+    started = time.monotonic()
+    deadline = started + (timeout_ms / 1000.0)
+    stable_since = None
+    last_state = None
+    last_url = ""
+
+    while time.monotonic() < deadline:
+        state = read_turn_state(tab_id)
+        last_state = state
+        last_url = core.tab_url(tab_id)
+
+        if isinstance(state, dict) and state.get("ok"):
+            user = state.get("user") or {}
+            assistant = state.get("assistant") or {}
+            user_matches = (
+                _normalize_chatgpt_text(user.get("text"))
+                == _normalize_chatgpt_text(prompt)
+            )
+            conversation_url = "/c/" in str(last_url or "")
+            idle = not state.get("hasStopButton") and not assistant.get(
+                "hasStreaming"
+            )
+
+            if user_matches and conversation_url and idle:
+                if stable_since is None:
+                    stable_since = time.monotonic()
+                elif (
+                    time.monotonic() - stable_since
+                    >= idle_stable_seconds
+                ):
+                    return {
+                        "ok": True,
+                        "tab_id": tab_id,
+                        "url": last_url,
+                        "prompt": prompt,
+                        "page_activity": _chatgpt_page_activity(state),
+                        "duration_ms": int(
+                            (time.monotonic() - started) * 1000
+                        ),
+                    }
+            else:
+                stable_since = None
+
+        time.sleep(0.1)
+
+    return {
+        "ok": False,
+        "error": "fresh_chat_initialization_timeout",
+        "stage": "verify_initial_prompt",
+        "tab_id": tab_id,
+        "url": last_url,
+        "detail": last_state,
+    }
+
+
+def create_fresh_chatgpt_pair(
+    ready_timeout_ms=_FRESH_CHAT_READY_TIMEOUT_MS,
+    progress=None,
+):
+    """Create, seed, and stabilize two clean ChatGPT conversations."""
+    created = {}
+
+    for label in ("A", "B"):
+        result = core.create_tab(_FRESH_CHATGPT_URL)
+        if not isinstance(result, dict) or not result.get("ok"):
+            return {
+                "ok": False,
+                "error": (
+                    result.get("error")
+                    if isinstance(result, dict)
+                    else "fresh_chat_create_failed"
+                ) or "fresh_chat_create_failed",
+                "stage": "create_fresh_chat",
+                "participant": label,
+                "detail": result,
+                "created": created,
+            }
+
+        created[label] = {
+            "id": result["id"],
+            "title": f"Fresh ChatGPT {label}",
+            "url": result.get("url") or _FRESH_CHATGPT_URL,
+        }
+
+    for label in ("A", "B"):
+        tab = created[label]
+        focus = core.set_focus_emulation(
+            tab["id"],
+            True,
+            timeout=None,
+        )
+        if not focus.get("ok"):
+            return {
+                "ok": False,
+                "error": "fresh_chat_focus_emulation_failed",
+                "stage": "focus_emulation",
+                "participant": label,
+                "detail": focus,
+                "created": created,
+            }
+        if callable(progress):
+            progress({
+                "label": label,
+                "stage": "focus_emulation",
+                "status": "complete",
+            })
+
+        ready = core.wait_for(
+            tab["id"],
+            "#prompt-textarea",
+            timeout_ms=ready_timeout_ms,
+        )
+        if not isinstance(ready, dict) or not ready.get("found"):
+            return {
+                "ok": False,
+                "error": (
+                    ready.get("error")
+                    if isinstance(ready, dict)
+                    else "fresh_chat_composer_timeout"
+                ) or "fresh_chat_composer_timeout",
+                "stage": "wait_fresh_chat",
+                "participant": label,
+                "detail": ready,
+                "created": created,
+            }
+
+        current_url = core.tab_url(tab["id"])
+        if current_url:
+            tab["url"] = current_url
+
+    for label in ("A", "B"):
+        tab = created[label]
+        if callable(progress):
+            progress({
+                "label": label,
+                "stage": "initial_prompt",
+                "status": "starting",
+                "prompt": _FRESH_CHAT_INITIAL_PROMPT,
+            })
+
+        initiated = _initiate_fresh_chatgpt_tab(tab["id"])
+        tab["initialization"] = initiated
+        if not initiated.get("ok"):
+            return {
+                "ok": False,
+                "error": initiated.get(
+                    "error",
+                    "fresh_chat_initialization_failed",
+                ),
+                "stage": initiated.get(
+                    "stage",
+                    "verify_initial_prompt",
+                ),
+                "participant": label,
+                "detail": initiated,
+                "created": created,
+            }
+
+        tab["url"] = initiated.get("url") or tab["url"]
+        if callable(progress):
+            progress({
+                "label": label,
+                "stage": "initial_prompt",
+                "status": "complete",
+                "url": tab["url"],
+                "page_activity": initiated.get("page_activity"),
+            })
+
+    return {
+        "ok": True,
+        "A": created["A"],
+        "B": created["B"],
+        "created": created,
+    }
+
+
+
+def create_fresh_chatgpt_participant(
+    label,
+    ready_timeout_ms=_FRESH_CHAT_READY_TIMEOUT_MS,
+    progress=None,
+):
+    """Create, seed, and stabilize one clean ChatGPT participant."""
+    label = str(label or "").strip().upper()
+    if label not in ("A", "B"):
+        return {
+            "ok": False,
+            "error": "invalid_participant_label",
+            "stage": "create_fresh_chat",
+            "participant": label or None,
+        }
+
+    result = core.create_tab(_FRESH_CHATGPT_URL)
+    if not isinstance(result, dict) or not result.get("ok"):
+        return {
+            "ok": False,
+            "error": (
+                result.get("error")
+                if isinstance(result, dict)
+                else "fresh_chat_create_failed"
+            ) or "fresh_chat_create_failed",
+            "stage": "create_fresh_chat",
+            "participant": label,
+            "detail": result,
+        }
+
+    tab = {
+        "id": result["id"],
+        "title": f"Fresh ChatGPT {label}",
+        "url": result.get("url") or _FRESH_CHATGPT_URL,
+        "source": "fresh",
+    }
+
+    focus = core.set_focus_emulation(
+        tab["id"],
+        True,
+        timeout=None,
+    )
+    if not focus.get("ok"):
+        return {
+            "ok": False,
+            "error": "fresh_chat_focus_emulation_failed",
+            "stage": "focus_emulation",
+            "participant": label,
+            "detail": focus,
+            "tab": tab,
+        }
+    if callable(progress):
+        progress({
+            "label": label,
+            "stage": "focus_emulation",
+            "status": "complete",
+        })
+
+    ready = core.wait_for(
+        tab["id"],
+        "#prompt-textarea",
+        timeout_ms=ready_timeout_ms,
+    )
+    if not isinstance(ready, dict) or not ready.get("found"):
+        return {
+            "ok": False,
+            "error": (
+                ready.get("error")
+                if isinstance(ready, dict)
+                else "fresh_chat_composer_timeout"
+            ) or "fresh_chat_composer_timeout",
+            "stage": "wait_fresh_chat",
+            "participant": label,
+            "detail": ready,
+            "tab": tab,
+        }
+
+    current_url = core.tab_url(tab["id"])
+    if current_url:
+        tab["url"] = current_url
+
+    if callable(progress):
+        progress({
+            "label": label,
+            "stage": "initial_prompt",
+            "status": "starting",
+            "prompt": _FRESH_CHAT_INITIAL_PROMPT,
+        })
+
+    initiated = _initiate_fresh_chatgpt_tab(tab["id"])
+    tab["initialization"] = initiated
+    if not initiated.get("ok"):
+        return {
+            "ok": False,
+            "error": initiated.get(
+                "error",
+                "fresh_chat_initialization_failed",
+            ),
+            "stage": initiated.get(
+                "stage",
+                "verify_initial_prompt",
+            ),
+            "participant": label,
+            "detail": initiated,
+            "tab": tab,
+        }
+
+    tab["url"] = initiated.get("url") or tab["url"]
+    if callable(progress):
+        progress({
+            "label": label,
+            "stage": "initial_prompt",
+            "status": "complete",
+            "url": tab["url"],
+            "page_activity": initiated.get("page_activity"),
+        })
+
+    return {
+        "ok": True,
+        "participant": label,
+        "tab": tab,
+    }
+
+
+def _emit_protocol_progress(progress, label, stage, status, **extra):
+    if not callable(progress):
+        return
+    event = {"label": label, "stage": stage, "status": status}
+    event.update(extra)
+    progress(event)
+
+
+def initialize_parley_pair(
+    tab_a,
+    tab_b,
+    *,
+    wait_timeout_ms=_PARLEY_PROTOCOL_WAIT_TIMEOUT_MS,
+    should_stop=None,
+    progress=None,
+):
+    """Provision and activate A/B protocols with explicit serial barriers."""
+    if tab_a == tab_b:
+        return {
+            "ok": False,
+            "error": "parley_same_tab",
+            "stage": "preflight",
+            "response_complete": False,
+        }
+
+    participants = {}
+    ordered = (
+        ("A", tab_a, _PARLEY_PROTOCOLS["A"]),
+        ("B", tab_b, _PARLEY_PROTOCOLS["B"]),
+    )
+
+    for label, tab_id, spec in ordered:
+        validation = _validate_chatgpt_tab(tab_id)
+        if not validation.get("ok"):
+            return {
+                "ok": False,
+                "error": validation.get(
+                    "error",
+                    "parley_tab_preflight_failed",
+                ),
+                "stage": "preflight",
+                "participant": label,
+                "response_complete": False,
+                "detail": validation,
+                "participants": participants,
+            }
+
+        active = _parley_protocol_active(tab_id, spec)
+        participants[label] = {
+            "tab_id": tab_id,
+            "already_active": active,
+        }
+        _emit_protocol_progress(
+            progress,
+            label,
+            "preflight",
+            "already_active" if active else "pending",
+        )
+
+    # Phase 1: A file + ACK, then B file + ACK.
+    for label, tab_id, spec in ordered:
+        if participants[label]["already_active"]:
+            _emit_protocol_progress(
+                progress, label, "protocol_ready", "complete", reused=True
+            )
+            continue
+
+        protocol_path = _PARLEY_PROTOCOL_DIR / spec["filename"]
+        adapter = _adapter_for_tab(tab_id)
+        pre_attachment_state = _snapshot_chatgpt_state(
+            tab_id,
+            adapter=adapter,
+            should_stop=should_stop,
+        )
+        if not pre_attachment_state.get("ok"):
+            return {
+                "ok": False,
+                "error": pre_attachment_state.get(
+                    "error",
+                    "parley_protocol_snapshot_failed",
+                ),
+                "stage": "protocol_snapshot",
+                "participant": label,
+                "response_complete": False,
+                "detail": pre_attachment_state,
+                "participants": participants,
+            }
+
+        _emit_protocol_progress(
+            progress,
+            label,
+            "provision",
+            "starting",
+            filename=spec["filename"],
+        )
+
+        attachment = attach_chatgpt_file(
+            tab_id,
+            protocol_path,
+            should_stop=should_stop,
+        )
+        participants[label]["attachment"] = attachment
+        if not attachment.get("ok"):
+            return {
+                "ok": False,
+                "error": attachment.get(
+                    "error",
+                    "parley_protocol_attachment_failed",
+                ),
+                "stage": "protocol_attachment",
+                "participant": label,
+                "response_complete": False,
+                "detail": attachment,
+                "participants": participants,
+            }
+
+        _emit_protocol_progress(
+            progress,
+            label,
+            "attachment_stabilizing",
+            "waiting",
+            seconds=_PARLEY_ATTACHMENT_STABILIZE_SECONDS,
+        )
+        if not _wait_protocol_attachment_stable(
+            should_stop=should_stop,
+        ):
+            return {
+                "ok": False,
+                "error": "chatgpt_wait_stopped",
+                "stage": "attachment_stabilizing",
+                "participant": label,
+                "response_complete": False,
+                "participants": participants,
+            }
+
+        ack_prompt = (
+            "Read the attached Parley protocol file. Do not initialize or "
+            "apply the Parley test protocol yet. Reply exactly with the "
+            "following text and nothing else:\n\n"
+            + spec["ack"]
+        )
+        _emit_protocol_progress(
+            progress, label, "protocol_ack", "waiting"
+        )
+        ack_result = _chatgpt_send_and_wait(
+            tab_id,
+            ack_prompt,
+            wait_timeout_ms=wait_timeout_ms,
+            adapter=adapter,
+            should_stop=should_stop,
+            pre_state_override=pre_attachment_state,
+            require_user_text_match=False,
+            submission_timeout_ms=60000,
+            expected_reply_prefix=spec["ack"],
+            expected_reply_suffix=spec["ack"],
+            retry_unsent_submission=True,
+            required_attachment_filename=spec["filename"],
+        )
+        participants[label]["provision"] = ack_result
+        if (
+            not isinstance(ack_result, dict)
+            or ack_result.get("error")
+            or not ack_result.get("response_complete")
+        ):
+            return {
+                "ok": False,
+                "error": (
+                    ack_result.get("error")
+                    if isinstance(ack_result, dict)
+                    else "parley_protocol_ack_failed"
+                ) or "parley_protocol_ack_failed",
+                "stage": "protocol_ack",
+                "participant": label,
+                "response_complete": False,
+                "detail": ack_result,
+                "participants": participants,
+            }
+
+        observed = (ack_result.get("response_text") or "").strip()
+        if observed != spec["ack"]:
+            return {
+                "ok": False,
+                "error": "parley_protocol_ack_mismatch",
+                "stage": "protocol_ack",
+                "participant": label,
+                "response_complete": False,
+                "expected": spec["ack"],
+                "observed": observed,
+                "participants": participants,
+            }
+
+        _emit_protocol_progress(
+            progress, label, "protocol_ready", "complete"
+        )
+
+    # Global barrier: both protocols are verified before activation begins.
+    for label, tab_id, spec in ordered:
+        if participants[label]["already_active"]:
+            _emit_protocol_progress(
+                progress, label, "ready", "complete", reused=True
+            )
+            continue
+
+        _emit_protocol_progress(
+            progress, label, "activation", "starting"
+        )
+        activation = send_and_wait(
+            tab_id,
+            spec["activation"],
+            wait_timeout_ms=wait_timeout_ms,
+            expected_reply_prefix=spec["reply_prefix"],
+            expected_reply_suffix=spec["reply_suffix"],
+            should_stop=should_stop,
+        )
+        participants[label]["activation"] = activation
+        if (
+            not isinstance(activation, dict)
+            or activation.get("error")
+            or not activation.get("response_complete")
+        ):
+            return {
+                "ok": False,
+                "error": (
+                    activation.get("error")
+                    if isinstance(activation, dict)
+                    else "parley_protocol_activation_failed"
+                ) or "parley_protocol_activation_failed",
+                "stage": "activation",
+                "participant": label,
+                "response_complete": False,
+                "detail": activation,
+                "participants": participants,
+            }
+
+        _emit_protocol_progress(
+            progress,
+            label,
+            "ready",
+            "complete",
+            response_text=activation.get("response_text"),
+        )
+
+    return {
+        "ok": True,
+        "response_complete": True,
+        "stage": "ready",
+        "participants": participants,
+    }
+
+
+
+
+def prepare_parley_session(
+    initial_prompt,
+    participant_specs,
+    *,
+    should_stop=None,
+    progress=None,
+):
+    """Prepare a Parley session from independently selected A/B sources.
+
+    Each participant spec must declare source="existing" with a concrete tab,
+    or source="fresh". Mixed existing/fresh sessions are supported.
+    """
+    prompt = str(initial_prompt or "").strip()
+    if not prompt:
+        return {
+            "ok": False,
+            "error": "parley_initial_prompt_required",
+            "stage": "initial_prompt",
+        }
+
+    specs = participant_specs if isinstance(participant_specs, dict) else {}
+    resolved = {}
+    sources = {}
+
+    def emit(stage, status, **extra):
+        if not callable(progress):
+            return
+        event = {"stage": stage, "status": status}
+        event.update(extra)
+        progress(event)
+
+    emit("participants", "starting")
+
+    for label in ("A", "B"):
+        spec = specs.get(label)
+        if not isinstance(spec, dict):
+            return {
+                "ok": False,
+                "error": "parley_participant_spec_required",
+                "stage": "participants",
+                "participant": label,
+            }
+
+        source = str(spec.get("source") or "").strip().lower()
+        sources[label] = source
+
+        if source == "fresh":
+            emit(
+                "participant",
+                "starting",
+                label=label,
+                source="fresh",
+            )
+            fresh = create_fresh_chatgpt_participant(
+                label,
+                progress=progress,
+            )
+            if not isinstance(fresh, dict) or not fresh.get("ok"):
+                return {
+                    "ok": False,
+                    "error": (
+                        fresh.get("error")
+                        if isinstance(fresh, dict)
+                        else "fresh_chat_create_failed"
+                    ) or "fresh_chat_create_failed",
+                    "stage": (
+                        fresh.get("stage", "participants")
+                        if isinstance(fresh, dict)
+                        else "participants"
+                    ),
+                    "participant": label,
+                    "detail": fresh,
+                    "participants": resolved,
+                }
+            resolved[label] = dict(fresh["tab"])
+            resolved[label]["source"] = "fresh"
+            emit(
+                "participant",
+                "complete",
+                label=label,
+                source="fresh",
+                tab_id=resolved[label]["id"],
+            )
+        elif source == "existing":
+            tab = spec.get("tab")
+            if not isinstance(tab, dict) or not tab.get("id"):
+                return {
+                    "ok": False,
+                    "error": "parley_existing_tab_required",
+                    "stage": "participants",
+                    "participant": label,
+                }
+            resolved[label] = dict(tab)
+            resolved[label]["source"] = "existing"
+            emit(
+                "participant",
+                "complete",
+                label=label,
+                source="existing",
+                tab_id=resolved[label]["id"],
+            )
+        else:
+            return {
+                "ok": False,
+                "error": "parley_participant_source_invalid",
+                "stage": "participants",
+                "participant": label,
+                "source": source or None,
+            }
+
+        if callable(should_stop) and should_stop():
+            return {
+                "ok": False,
+                "error": "chatgpt_wait_stopped",
+                "stage": "participants",
+                "participant": label,
+                "participants": resolved,
+            }
+
+    tab_a = resolved["A"]
+    tab_b = resolved["B"]
+    if tab_a["id"] == tab_b["id"]:
+        return {
+            "ok": False,
+            "error": "parley_same_tab",
+            "stage": "participants",
+            "A": tab_a,
+            "B": tab_b,
+        }
+
+    emit("participants", "complete")
+
+    emit("protocols", "starting")
+    initialized = initialize_parley_pair(
+        tab_a["id"],
+        tab_b["id"],
+        wait_timeout_ms=None,
+        should_stop=should_stop,
+        progress=progress,
+    )
+    if not isinstance(initialized, dict) or not initialized.get("ok"):
+        return {
+            "ok": False,
+            "error": (
+                initialized.get("error")
+                if isinstance(initialized, dict)
+                else "parley_protocol_bootstrap_failed"
+            ) or "parley_protocol_bootstrap_failed",
+            "stage": (
+                initialized.get("stage", "protocols")
+                if isinstance(initialized, dict)
+                else "protocols"
+            ),
+            "participant": (
+                initialized.get("participant")
+                if isinstance(initialized, dict)
+                else None
+            ),
+            "detail": initialized,
+            "A": tab_a,
+            "B": tab_b,
+            "sources": sources,
+        }
+
+    emit("protocols", "complete")
+    emit("session_prompt", "starting", label="A")
+    initial = send_and_wait(
+        tab_a["id"],
+        prompt,
+        wait_timeout_ms=None,
+        expected_reply_prefix=TEST_A_REPLY_PREFIX,
+        expected_reply_suffix=TEST_A_REPLY_SUFFIX,
+        should_stop=should_stop,
+    )
+    if (
+        not isinstance(initial, dict)
+        or initial.get("error")
+        or not initial.get("response_complete")
+    ):
+        return {
+            "ok": False,
+            "error": (
+                initial.get("error")
+                if isinstance(initial, dict)
+                else "parley_initial_prompt_failed"
+            ) or "parley_initial_prompt_failed",
+            "stage": "session_prompt",
+            "participant": "A",
+            "detail": initial,
+            "A": tab_a,
+            "B": tab_b,
+            "sources": sources,
+        }
+
+    text = (initial.get("response_text") or "").strip()
+    if text == RESET_CHAT_COMMAND:
+        return {
+            "ok": False,
+            "error": "parley_initial_reset_requested",
+            "stage": "session_prompt",
+            "participant": "A",
+            "detail": initial,
+            "A": tab_a,
+            "B": tab_b,
+            "sources": sources,
+        }
+
+    emit(
+        "session_prompt",
+        "complete",
+        label="A",
+        response_chars=len(text),
+    )
+    return {
+        "ok": True,
+        "stage": "ready",
+        "A": tab_a,
+        "B": tab_b,
+        "sources": sources,
+        "protocols": initialized,
+        "initial_prompt": prompt,
+        "initial_response": initial,
+        "initial_response_text": text,
+    }
+
+
+def prepare_fresh_parley_session(
+    initial_prompt,
+    *,
+    should_stop=None,
+    progress=None,
+):
+    """Prepare a fresh A/B Parley session through the proven live workflow.
+
+    This is the shared application-level startup boundary:
+    fresh chats -> seeded conversations -> protocol bootstrap -> initial A reply.
+    Presentation layers should call this instead of reimplementing startup.
+    """
+    prompt = str(initial_prompt or "").strip()
+    if not prompt:
+        return {
+            "ok": False,
+            "error": "parley_initial_prompt_required",
+            "stage": "initial_prompt",
+        }
+
+    def emit(stage, status, **extra):
+        if not callable(progress):
+            return
+        event = {"stage": stage, "status": status}
+        event.update(extra)
+        progress(event)
+
+    emit("fresh_chats", "starting")
+    fresh = create_fresh_chatgpt_pair(progress=progress)
+    if not isinstance(fresh, dict) or not fresh.get("ok"):
+        return {
+            "ok": False,
+            "error": (
+                fresh.get("error")
+                if isinstance(fresh, dict)
+                else "fresh_chat_create_failed"
+            ) or "fresh_chat_create_failed",
+            "stage": (
+                fresh.get("stage", "fresh_chats")
+                if isinstance(fresh, dict)
+                else "fresh_chats"
+            ),
+            "participant": (
+                fresh.get("participant")
+                if isinstance(fresh, dict)
+                else None
+            ),
+            "detail": fresh,
+        }
+
+    tab_a = fresh["A"]
+    tab_b = fresh["B"]
+    emit("fresh_chats", "complete")
+
+    if callable(should_stop) and should_stop():
+        return {
+            "ok": False,
+            "error": "chatgpt_wait_stopped",
+            "stage": "fresh_chats",
+            "A": tab_a,
+            "B": tab_b,
+        }
+
+    emit("protocols", "starting")
+    initialized = initialize_parley_pair(
+        tab_a["id"],
+        tab_b["id"],
+        wait_timeout_ms=None,
+        should_stop=should_stop,
+        progress=progress,
+    )
+    if not isinstance(initialized, dict) or not initialized.get("ok"):
+        return {
+            "ok": False,
+            "error": (
+                initialized.get("error")
+                if isinstance(initialized, dict)
+                else "parley_protocol_bootstrap_failed"
+            ) or "parley_protocol_bootstrap_failed",
+            "stage": (
+                initialized.get("stage", "protocols")
+                if isinstance(initialized, dict)
+                else "protocols"
+            ),
+            "participant": (
+                initialized.get("participant")
+                if isinstance(initialized, dict)
+                else None
+            ),
+            "detail": initialized,
+            "A": tab_a,
+            "B": tab_b,
+        }
+
+    emit("protocols", "complete")
+    emit("session_prompt", "starting", label="A")
+    initial = send_and_wait(
+        tab_a["id"],
+        prompt,
+        wait_timeout_ms=None,
+        expected_reply_prefix=TEST_A_REPLY_PREFIX,
+        expected_reply_suffix=TEST_A_REPLY_SUFFIX,
+        should_stop=should_stop,
+    )
+    if (
+        not isinstance(initial, dict)
+        or initial.get("error")
+        or not initial.get("response_complete")
+    ):
+        return {
+            "ok": False,
+            "error": (
+                initial.get("error")
+                if isinstance(initial, dict)
+                else "parley_initial_prompt_failed"
+            ) or "parley_initial_prompt_failed",
+            "stage": "session_prompt",
+            "participant": "A",
+            "detail": initial,
+            "A": tab_a,
+            "B": tab_b,
+        }
+
+    text = (initial.get("response_text") or "").strip()
+    if text == RESET_CHAT_COMMAND:
+        return {
+            "ok": False,
+            "error": "parley_initial_reset_requested",
+            "stage": "session_prompt",
+            "participant": "A",
+            "detail": initial,
+            "A": tab_a,
+            "B": tab_b,
+        }
+
+    emit(
+        "session_prompt",
+        "complete",
+        label="A",
+        response_chars=len(text),
+    )
+    return {
+        "ok": True,
+        "stage": "ready",
+        "A": tab_a,
+        "B": tab_b,
+        "fresh": fresh,
+        "protocols": initialized,
+        "initial_prompt": prompt,
+        "initial_response": initial,
+        "initial_response_text": text,
+    }
+
+
+
+
+def _chatgpt_unsent_submission_js(text, attachment_filename=None):
+    """Return JS proving the composer still holds the unsent transaction."""
+    expected = json.dumps(_normalize_chatgpt_text(text))
+    attachment = json.dumps(
+        str(attachment_filename)
+        if attachment_filename
+        else ""
+    )
+    return f"""
+(() => {{
+    const normalize = (value) => String(value || '')
+        .replace(/\\s+/g, ' ')
+        .trim();
+    const expected = {expected};
+    const attachmentName = {attachment};
+    const composer = document.querySelector('#prompt-textarea');
+    const rawText = composer
+        ? (
+            composer.tagName === 'TEXTAREA'
+                ? composer.value
+                : (composer.innerText || composer.textContent || '')
+        )
+        : '';
+    const button = document.querySelector(
+        'button[data-testid="send-button"]'
+    );
+    const stop = document.querySelector(
+        'button[data-testid="stop-button"],'
+        + 'button[aria-label*="Stop"],'
+        + 'button[aria-label*="stop"]'
+    );
+
+    let attachmentPresent = !attachmentName;
+    if (attachmentName) {{
+        const root = (
+            (composer && composer.closest('form')) ||
+            (composer && composer.parentElement &&
+                composer.parentElement.parentElement) ||
+            document.body
+        );
+        attachmentPresent = Array.from(
+            root.querySelectorAll('*')
+        ).some((el) => {{
+            if (el.children.length) return false;
+            return (el.textContent || '').trim() === attachmentName;
+        }}) || Array.from(
+            root.querySelectorAll('[title],[aria-label]')
+        ).some((el) => {{
+            const title = el.getAttribute('title') || '';
+            const aria = el.getAttribute('aria-label') || '';
+            return (
+                title.includes(attachmentName) ||
+                aria.includes(attachmentName)
+            );
+        }});
+    }}
+
+    const sendEnabled = !!(
+        button &&
+        !button.disabled &&
+        button.getAttribute('aria-disabled') !== 'true'
+    );
+    const exactText = normalize(rawText) === expected;
+    return {{
+        ok: true,
+        source: 'chatgpt-unsent-submission',
+        exactText,
+        sendEnabled,
+        hasStopButton: !!stop,
+        attachmentPresent,
+        composerChars: normalize(rawText).length,
+    }};
+}})()
+"""
+
+
 def _chatgpt_send_and_wait(
     tab_id,
     text,
     wait_timeout_ms=60000,
     silence_ms=1500,
     adapter=None,
+    expected_reply_prefix=None,
+    expected_reply_suffix=None,
+    should_stop=None,
+    pre_state_override=None,
+    require_user_text_match=True,
+    submission_timeout_ms=10000,
+    retry_unsent_submission=False,
+    required_attachment_filename=None,
+    submission_retry_interval_ms=2000,
+    max_submission_attempts=4,
 ):
     """Strict ChatGPT send/wait transaction using one target connection.
 
@@ -352,8 +1904,10 @@ def _chatgpt_send_and_wait(
     - one target connection from snapshot through completion;
     - submission must be proven by a newer user turn;
     - response must be proven to be a newer assistant turn;
-    - only that assistant turn may satisfy completion;
-    - ambiguous or changing turn identity fails closed.
+    - only a provably post-submission assistant candidate may satisfy completion;
+    - transient candidate identity replacement is allowed while the same
+      verified user turn remains current;
+    - a newer user turn or ambiguous response state fails closed.
     """
     if adapter is None:
         adapter = _adapter_for_tab(tab_id)
@@ -364,9 +1918,18 @@ def _chatgpt_send_and_wait(
         }
 
     started = time.monotonic()
-    deadline = started + (wait_timeout_ms / 1000.0)
+    deadline = (
+        None
+        if wait_timeout_ms is None
+        else started + (wait_timeout_ms / 1000.0)
+    )
 
-    ws = cdp_connect(tab_id)
+    def keep_waiting(until=None):
+        if callable(should_stop) and should_stop():
+            return False
+        return until is None or time.monotonic() < until
+
+    ws = cdp_connect(tab_id, timeout=None)
     if not ws:
         return {
             "error": "cannot_connect_to_tab",
@@ -387,7 +1950,34 @@ def _chatgpt_send_and_wait(
         return result
 
     try:
-        pre_state = _chatgpt_state(ws, adapter)
+        focus = core.set_focus_emulation(
+            tab_id,
+            True,
+            timeout=None,
+            ws=ws,
+            should_stop=should_stop,
+        )
+        if not focus.get("ok"):
+            return fail(
+                "chatgpt_focus_emulation_failed",
+                "focus_emulation",
+                detail=focus,
+            )
+
+        pre_state = pre_state_override
+        if pre_state is None:
+            pre_state = _chatgpt_state(
+                ws,
+                adapter,
+                should_stop=should_stop,
+            )
+        if not isinstance(pre_state, dict):
+            return fail(
+                "chatgpt_snapshot_invalid",
+                "snapshot",
+            )
+        if pre_state.get("error") == "stopped":
+            return fail("chatgpt_wait_stopped", "snapshot")
         if not pre_state.get("ok"):
             return fail(
                 pre_state.get("error", "chatgpt_snapshot_failed"),
@@ -400,7 +1990,13 @@ def _chatgpt_send_and_wait(
         )
         pre_user_count = int(pre_state.get("user_count", 0) or 0)
 
-        prepare = _chatgpt_eval(ws, adapter.prepare_composer_js)
+        prepare = _chatgpt_eval(
+            ws,
+            adapter.prepare_composer_js,
+            should_stop=should_stop,
+        )
+        if prepare.get("error") == "stopped":
+            return fail("chatgpt_wait_stopped", "prepare")
         if not prepare.get("ok"):
             return fail(
                 prepare.get("error", "chatgpt_composer_prepare_failed"),
@@ -408,7 +2004,15 @@ def _chatgpt_send_and_wait(
                 detail=prepare,
             )
 
-        insert_result = cdp_send(ws, "Input.insertText", {"text": text})
+        insert_result = cdp_send(
+            ws,
+            "Input.insertText",
+            {"text": text},
+            timeout=None,
+            should_stop=should_stop,
+        )
+        if isinstance(insert_result, dict) and insert_result.get("error") == "stopped":
+            return fail("chatgpt_wait_stopped", "insert")
         if (
             not isinstance(insert_result, dict)
             or insert_result.get("error")
@@ -423,7 +2027,13 @@ def _chatgpt_send_and_wait(
         # Give React enough time to enable the send button after insertText.
         time.sleep(0.2)
 
-        click = _chatgpt_eval(ws, adapter.click_send_js)
+        click = _chatgpt_eval(
+            ws,
+            adapter.click_send_js,
+            should_stop=should_stop,
+        )
+        if click.get("error") == "stopped":
+            return fail("chatgpt_wait_stopped", "submit")
         if not click.get("ok"):
             return fail(
                 click.get("error", "chatgpt_send_failed"),
@@ -431,34 +2041,338 @@ def _chatgpt_send_and_wait(
                 detail=click,
             )
 
+        submission_attempts = 1
+        last_unsent_evidence = None
+        next_submission_retry = (
+            time.monotonic()
+            + (submission_retry_interval_ms / 1000.0)
+        )
+
         # Submission is not considered successful until ChatGPT's DOM proves a
         # newer user turn exists.
         submitted_state = None
-        submission_deadline = min(deadline, time.monotonic() + 10.0)
-        while time.monotonic() < submission_deadline:
-            state = _chatgpt_state(ws, adapter)
+        human_reset_requested = False
+        last_submission_state = None
+        submission_limit = (
+            None
+            if submission_timeout_ms is None
+            else time.monotonic() + (
+                submission_timeout_ms / 1000.0
+            )
+        )
+        if deadline is None:
+            submission_deadline = submission_limit
+        elif submission_limit is None:
+            submission_deadline = deadline
+        else:
+            submission_deadline = min(
+                deadline,
+                submission_limit,
+            )
+        while keep_waiting(submission_deadline):
+            state = _chatgpt_state(ws, adapter, should_stop=should_stop)
+            last_submission_state = state
             if not state.get("ok"):
                 return fail(
                     state.get("error", "chatgpt_state_failed"),
                     "verify_submission",
                     detail=state,
                 )
-            if int(state.get("user_count", 0) or 0) > pre_user_count:
+            expected_user_text = (
+                text
+                if require_user_text_match
+                else None
+            )
+            if _chatgpt_has_new_user(
+                pre_state,
+                state,
+                expected_user_text,
+            ):
                 submitted_state = state
                 break
+            if _chatgpt_has_new_user(pre_state, state, "RESET CHAT"):
+                submitted_state = state
+                human_reset_requested = True
+                break
+
+            if (
+                retry_unsent_submission
+                and submission_attempts < max_submission_attempts
+                and time.monotonic() >= next_submission_retry
+            ):
+                evidence = _chatgpt_eval(
+                    ws,
+                    _chatgpt_unsent_submission_js(
+                        text,
+                        required_attachment_filename,
+                    ),
+                    should_stop=should_stop,
+                )
+                last_unsent_evidence = evidence
+                if evidence.get("error") == "stopped":
+                    return fail(
+                        "chatgpt_wait_stopped",
+                        "verify_submission",
+                        submission_attempts=submission_attempts,
+                    )
+
+                safe_to_retry = bool(
+                    evidence.get("ok")
+                    and evidence.get("exactText")
+                    and evidence.get("sendEnabled")
+                    and not evidence.get("hasStopButton")
+                    and evidence.get("attachmentPresent")
+                )
+                if safe_to_retry:
+                    retry_click = _chatgpt_eval(
+                        ws,
+                        adapter.click_send_js,
+                        should_stop=should_stop,
+                    )
+                    if retry_click.get("error") == "stopped":
+                        return fail(
+                            "chatgpt_wait_stopped",
+                            "verify_submission",
+                            submission_attempts=submission_attempts,
+                        )
+                    if retry_click.get("ok"):
+                        submission_attempts += 1
+
+                next_submission_retry = (
+                    time.monotonic()
+                    + (submission_retry_interval_ms / 1000.0)
+                )
+
             time.sleep(0.1)
 
         if submitted_state is None:
+            if callable(should_stop) and should_stop():
+                return fail(
+                    "chatgpt_wait_stopped",
+                    "verify_submission",
+                    pre_user_count=pre_user_count,
+                )
+            observed_user = (
+                (last_submission_state or {}).get("user") or {}
+            )
+            pre_user = pre_state.get("user") or {}
+            observed_text = _normalize_chatgpt_text(
+                observed_user.get("text")
+            )
+            pre_text = _normalize_chatgpt_text(
+                pre_user.get("text")
+            )
+            expected_text = _normalize_chatgpt_text(text)
             return fail(
                 "chatgpt_submission_not_verified",
                 "verify_submission",
+                pre_user_count=pre_user_count,
+                pre_user_turn_id=pre_user.get("turn_id"),
+                pre_user_chars=len(pre_text),
+                observed_user_count=int(
+                    (last_submission_state or {}).get("user_count", 0)
+                    or 0
+                ),
+                observed_user_turn_id=observed_user.get("turn_id"),
+                observed_user_chars=len(observed_text),
+                expected_user_chars=len(expected_text),
+                expected_user_text_match=bool(
+                    expected_text and observed_text == expected_text
+                ),
+                user_text_verification_required=bool(
+                    require_user_text_match
+                ),
+                submission_attempts=submission_attempts,
+                last_unsent_evidence=last_unsent_evidence,
+                page_activity=_chatgpt_page_activity(
+                    last_submission_state or {}
+                ),
+            )
+
+        # Test-protocol mode uses an explicit final-reply marker as positive
+        # evidence that ChatGPT has reached the real assistant answer. This
+        # deliberately ignores transient "Thinking" surfaces and temporary
+        # React rollbacks to the pre-submission assistant turn.
+        if expected_reply_prefix:
+            expected_prefix = str(expected_reply_prefix).strip()
+            expected_suffix = (
+                str(expected_reply_suffix).strip()
+                if expected_reply_suffix
+                else None
+            )
+            last_text = ""
+            last_change = time.monotonic()
+            candidate_replacements = 0
+            last_identity = None
+            candidate_seen = False
+
+            while keep_waiting(deadline):
+                state = _chatgpt_state(ws, adapter, should_stop=should_stop)
+                if not state.get("ok"):
+                    return fail(
+                        state.get("error", "chatgpt_state_failed"),
+                        "track_marked_response",
+                        response_text=last_text,
+                        detail=state,
+                    )
+
+                if not _chatgpt_same_user_turn(submitted_state, state):
+                    current_user = state.get("user") or {}
+                    current_user_text = _normalize_chatgpt_text(
+                        current_user.get("text")
+                    )
+                    if (
+                        current_user_text == "RESET CHAT"
+                        and _chatgpt_has_new_user(
+                            submitted_state,
+                            state,
+                            "RESET CHAT",
+                        )
+                    ):
+                        submitted_state = state
+                        human_reset_requested = True
+                        candidate_seen = False
+                        last_identity = None
+                        last_text = ""
+                        last_change = time.monotonic()
+                        time.sleep(0.1)
+                        continue
+
+                    submitted_user = submitted_state.get("user") or {}
+                    return fail(
+                        "chatgpt_user_turn_changed_during_response",
+                        "track_marked_response",
+                        response_text=last_text,
+                        expected_user_turn_id=submitted_user.get("turn_id"),
+                        current_user_turn_id=current_user.get("turn_id"),
+                    )
+
+                current = state.get("assistant")
+                current_text = (
+                    (current or {}).get("text") or ""
+                ).strip()
+                is_reset = current_text == "RESET CHAT"
+                has_open_marker = current_text.startswith(expected_prefix)
+                has_close_marker = (
+                    not expected_suffix
+                    or current_text.endswith(expected_suffix)
+                )
+                is_marked = has_open_marker and has_close_marker
+
+                eligible = bool(
+                    current
+                    and _chatgpt_has_new_assistant(pre_state, state)
+                    and (is_marked or is_reset)
+                )
+
+                if not eligible:
+                    # The latest rendered assistant may temporarily be
+                    # "Thinking", disappear, or roll back to the old answer.
+                    # When a terminal marker is configured, a partial
+                    # reply with only the opening marker is ineligible. In
+                    # prefix-only protocol mode, the opening marker plus the
+                    # normal stability/streaming checks is sufficient.
+                    candidate_seen = False
+                    last_identity = None
+                    last_text = ""
+                    last_change = time.monotonic()
+                    time.sleep(0.2)
+                    continue
+
+                current_count = int(
+                    state.get("assistant_count", 0) or 0
+                )
+                current_identity = (
+                    current.get("turn_id"),
+                    current.get("turn_index"),
+                    current_count,
+                )
+                now = time.monotonic()
+
+                if not candidate_seen:
+                    candidate_seen = True
+                    last_identity = current_identity
+                    last_text = current_text
+                    last_change = now
+                elif current_identity != last_identity:
+                    candidate_replacements += 1
+                    last_identity = current_identity
+                    last_text = current_text
+                    last_change = now
+                elif current_text != last_text:
+                    last_text = current_text
+                    last_change = now
+
+                streaming = bool(
+                    current.get("hasStreaming")
+                    or state.get("hasStopButton")
+                )
+                stable_ms = int((now - last_change) * 1000)
+
+                if (
+                    last_text
+                    and not streaming
+                    and stable_ms >= silence_ms
+                ):
+                    return {
+                        "pre_msg_count": pre_assistant_count,
+                        "pre_user_count": pre_user_count,
+                        "post_user_count": int(
+                            state.get("user_count", 0) or 0
+                        ),
+                        "submitted_user_turn_id": (
+                            (submitted_state.get("user") or {}).get("turn_id")
+                        ),
+                        "send_method": click.get(
+                            "method",
+                            "chatgpt-send-button",
+                        ),
+                        "sent_chars": len(text),
+                        "response_text": last_text,
+                        "response_complete": True,
+                        "response_turn_id": current.get("turn_id"),
+                        "response_turn_index": current.get("turn_index"),
+                        "response_source": "chatgpt-strict",
+                        "response_candidate_replacements": (
+                            candidate_replacements
+                        ),
+                        "expected_reply_prefix": expected_prefix,
+                        "expected_reply_suffix": expected_suffix,
+                        "human_reset_requested": human_reset_requested,
+                        "submission_attempts": submission_attempts,
+                        "focus_emulation": True,
+                        "page_activity": _chatgpt_page_activity(state),
+                        "response_duration_ms": int(
+                            (now - started) * 1000
+                        ),
+                    }
+
+                time.sleep(0.2)
+
+            if callable(should_stop) and should_stop():
+                return fail(
+                    "chatgpt_wait_stopped",
+                    "track_marked_response",
+                    response_text=last_text,
+                    pre_msg_count=pre_assistant_count,
+                    pre_user_count=pre_user_count,
+                )
+
+            return fail(
+                "chatgpt_marked_response_timeout",
+                "track_marked_response",
+                response_text=last_text,
+                expected_reply_prefix=expected_prefix,
+                expected_reply_suffix=expected_suffix,
+                response_candidate_replacements=candidate_replacements,
+                pre_msg_count=pre_assistant_count,
                 pre_user_count=pre_user_count,
             )
 
         # Now require a provably newer assistant turn.
         response_state = None
-        while time.monotonic() < deadline:
-            state = _chatgpt_state(ws, adapter)
+        while keep_waiting(deadline):
+            state = _chatgpt_state(ws, adapter, should_stop=should_stop)
             if not state.get("ok"):
                 return fail(
                     state.get("error", "chatgpt_state_failed"),
@@ -471,6 +2385,12 @@ def _chatgpt_send_and_wait(
             time.sleep(0.2)
 
         if response_state is None:
+            if callable(should_stop) and should_stop():
+                return fail(
+                    "chatgpt_wait_stopped",
+                    "wait_for_response",
+                    pre_assistant_count=pre_assistant_count,
+                )
             return fail(
                 "chatgpt_new_assistant_turn_timeout",
                 "wait_for_response",
@@ -486,18 +2406,38 @@ def _chatgpt_send_and_wait(
         target_assistant_count = int(
             response_state.get("assistant_count", 0) or 0
         )
+        submitted_user_count = int(
+            submitted_state.get("user_count", 0) or 0
+        )
 
         last_text = (target.get("text") or "").strip()
         last_change = time.monotonic()
+        candidate_replacements = 0
 
-        while time.monotonic() < deadline:
-            state = _chatgpt_state(ws, adapter)
+        while keep_waiting(deadline):
+            state = _chatgpt_state(ws, adapter, should_stop=should_stop)
             if not state.get("ok"):
                 return fail(
                     state.get("error", "chatgpt_state_failed"),
                     "track_response",
                     response_text=last_text,
                     detail=state,
+                )
+
+            current_user_count = int(
+                state.get("user_count", 0) or 0
+            )
+            if not _chatgpt_same_user_turn(submitted_state, state):
+                submitted_user = submitted_state.get("user") or {}
+                current_user = state.get("user") or {}
+                return fail(
+                    "chatgpt_user_turn_changed_during_response",
+                    "track_response",
+                    response_text=last_text,
+                    expected_user_count=submitted_user_count,
+                    current_user_count=current_user_count,
+                    expected_user_turn_id=submitted_user.get("turn_id"),
+                    current_user_turn_id=current_user.get("turn_id"),
                 )
 
             current = state.get("assistant")
@@ -508,46 +2448,47 @@ def _chatgpt_send_and_wait(
                     response_text=last_text,
                 )
 
+            if not _chatgpt_has_new_assistant(pre_state, state):
+                return fail(
+                    "chatgpt_response_candidate_not_new",
+                    "track_response",
+                    response_text=last_text,
+                )
+
             current_count = int(
                 state.get("assistant_count", 0) or 0
             )
-            if current_count > target_assistant_count:
-                return fail(
-                    "chatgpt_unexpected_newer_assistant_turn",
-                    "track_response",
-                    response_text=last_text,
-                    expected_assistant_count=target_assistant_count,
-                    current_assistant_count=current_count,
-                )
-
             current_turn_id = current.get("turn_id")
             current_turn_index = current.get("turn_index")
-
-            if (
-                target_turn_id
-                and current_turn_id
-                and current_turn_id != target_turn_id
-            ):
-                return fail(
-                    "chatgpt_assistant_turn_changed",
-                    "track_response",
-                    response_text=last_text,
-                )
-
-            if (
-                not target_turn_id
-                and current_turn_index != target_turn_index
-            ):
-                return fail(
-                    "chatgpt_assistant_turn_index_changed",
-                    "track_response",
-                    response_text=last_text,
-                )
-
             current_text = (current.get("text") or "").strip()
             now = time.monotonic()
 
-            if current_text != last_text:
+            identity_changed = (
+                (
+                    target_turn_id
+                    and current_turn_id
+                    and current_turn_id != target_turn_id
+                )
+                or (
+                    target_turn_index is not None
+                    and current_turn_index != target_turn_index
+                )
+                or current_count != target_assistant_count
+            )
+
+            if identity_changed:
+                # Current ChatGPT can expose a transient assistant candidate
+                # (for example a "Thinking" surface) and then replace it with
+                # the actual answer while processing the same submitted user
+                # turn. Follow that replacement only while the transaction's
+                # verified user-turn boundary remains unchanged.
+                target_turn_id = current_turn_id
+                target_turn_index = current_turn_index
+                target_assistant_count = current_count
+                candidate_replacements += 1
+                last_text = current_text
+                last_change = now
+            elif current_text != last_text:
                 last_text = current_text
                 last_change = now
 
@@ -568,6 +2509,9 @@ def _chatgpt_send_and_wait(
                     "post_user_count": int(
                         state.get("user_count", 0) or 0
                     ),
+                    "submitted_user_turn_id": (
+                        (submitted_state.get("user") or {}).get("turn_id")
+                    ),
                     "send_method": click.get(
                         "method",
                         "chatgpt-send-button",
@@ -578,6 +2522,9 @@ def _chatgpt_send_and_wait(
                     "response_turn_id": current_turn_id,
                     "response_turn_index": current_turn_index,
                     "response_source": "chatgpt-strict",
+                    "response_candidate_replacements": candidate_replacements,
+                    "focus_emulation": True,
+                    "page_activity": _chatgpt_page_activity(state),
                     "response_duration_ms": int(
                         (now - started) * 1000
                     ),
@@ -585,12 +2532,22 @@ def _chatgpt_send_and_wait(
 
             time.sleep(0.2)
 
+        if callable(should_stop) and should_stop():
+            return fail(
+                "chatgpt_wait_stopped",
+                "track_response",
+                response_text=last_text,
+                response_turn_id=target_turn_id,
+                response_turn_index=target_turn_index,
+            )
+
         return fail(
             "chatgpt_response_completion_timeout",
             "track_response",
             response_text=last_text,
             response_turn_id=target_turn_id,
             response_turn_index=target_turn_index,
+            response_candidate_replacements=candidate_replacements,
             pre_msg_count=pre_assistant_count,
             pre_user_count=pre_user_count,
             post_user_count=int(
@@ -731,7 +2688,15 @@ def _legacy_send_and_wait(
     return result
 
 
-def send_and_wait(tab_id, text, wait_timeout_ms=60000, silence_ms=1500):
+def send_and_wait(
+    tab_id,
+    text,
+    wait_timeout_ms=60000,
+    silence_ms=1500,
+    expected_reply_prefix=None,
+    expected_reply_suffix=None,
+    should_stop=None,
+):
     """Send text and wait for a new completed response.
 
     ChatGPT uses the strict one-connection transaction path. Other adapters
@@ -751,6 +2716,9 @@ def send_and_wait(tab_id, text, wait_timeout_ms=60000, silence_ms=1500):
             wait_timeout_ms=wait_timeout_ms,
             silence_ms=silence_ms,
             adapter=adapter,
+            expected_reply_prefix=expected_reply_prefix,
+            expected_reply_suffix=expected_reply_suffix,
+            should_stop=should_stop,
         )
 
     return _legacy_send_and_wait(
@@ -796,6 +2764,7 @@ def bridge(
     control=None,
     include_text=False,
     event_sink=None,
+    initial_context=None,
 ):
     """Run a guarded bidirectional ChatGPT relay.
 
@@ -809,9 +2778,11 @@ def bridge(
         tab_to,
         rounds,
         read_response=read_response,
+        read_turn_state=read_turn_state,
         send_and_wait=send_and_wait,
         validate_tab=_validate_chatgpt_tab,
         control=control,
         include_text=include_text,
         event_sink=event_sink,
+        initial_context=initial_context,
     )

@@ -23,6 +23,33 @@ from .state import (
 )
 
 
+TEST_A_REPLY_PREFIX = "A REPLY:"
+TEST_A_REPLY_SUFFIX = "A REPLY END"
+TEST_B_REPLY_PREFIX = "B REPLY:"
+TEST_B_REPLY_SUFFIX = "B REPLY END"
+RESET_CHAT_COMMAND = "RESET CHAT"
+RELAY_RESPONSE_TIMEOUT_MS = None
+
+
+def _is_reset_command(text):
+    return str(text or "").strip() == RESET_CHAT_COMMAND
+
+
+def _has_reply_prefix(text, prefix):
+    return str(text or "").lstrip().startswith(prefix)
+
+
+def _has_reply_suffix(text, suffix):
+    return str(text or "").rstrip().endswith(suffix)
+
+
+def _has_reply_markers(text, prefix, suffix):
+    return (
+        _has_reply_prefix(text, prefix)
+        and _has_reply_suffix(text, suffix)
+    )
+
+
 def _initial_turn(value):
     """Normalize the starting completed assistant turn from ChatGPT A."""
     if not isinstance(value, dict):
@@ -46,6 +73,7 @@ def _initial_turn(value):
         "turn_id": value.get("turn_id"),
         "turn_index": value.get("turn_index"),
         "source": "chatgpt-strict",
+        "page_activity": value.get("page_activity"),
     }, None
 
 
@@ -72,6 +100,7 @@ def _completed_reply(value):
         "turn_id": value.get("response_turn_id"),
         "turn_index": value.get("response_turn_index"),
         "source": "chatgpt-strict",
+        "page_activity": value.get("page_activity"),
     }, None
 
 
@@ -98,6 +127,14 @@ def _transfer_record(
         "response_chars": len(response_turn["text"]),
         "response_hash": turn_text_hash(response_turn),
     }
+    if source_turn.get("page_activity") is not None:
+        record["source_page_activity"] = source_turn.get(
+            "page_activity"
+        )
+    if response_turn.get("page_activity") is not None:
+        record["response_page_activity"] = response_turn.get(
+            "page_activity"
+        )
     if include_text:
         record["source_text"] = source_turn["text"]
         record["response_text"] = response_turn["text"]
@@ -151,10 +188,12 @@ def run_bidirectional_relay(
     *,
     read_response,
     send_and_wait,
+    read_turn_state=None,
     validate_tab=None,
     control=None,
     include_text=False,
     event_sink=None,
+    initial_context=None,
 ):
     """Run a guarded A -> B -> A relay for a fixed number of rounds.
 
@@ -174,13 +213,17 @@ def run_bidirectional_relay(
 
     guard = DuplicateGuard()
 
+    def current_round_limit():
+        value = getattr(control, "round_limit", None)
+        return rounds if value is None else value
+
     result = {
         "status": "running",
         "state": IDLE,
         "state_history": [IDLE],
         "tab_a": tab_a,
         "tab_b": tab_b,
-        "rounds_requested": rounds,
+        "rounds_requested": current_round_limit(),
         "rounds_completed": 0,
         "transfers": [],
         "audit": [],
@@ -238,6 +281,138 @@ def run_bidirectional_relay(
             round=round_number,
         )
         return result
+
+    def coordinated_reset(label, stage, round_number=None):
+        counterpart_label = "B" if label == "A" else "A"
+        counterpart_tab = tab_b if label == "A" else tab_a
+        expected_prefix = (
+            TEST_B_REPLY_PREFIX if label == "A" else TEST_A_REPLY_PREFIX
+        )
+        expected_suffix = (
+            TEST_B_REPLY_SUFFIX if label == "A" else TEST_A_REPLY_SUFFIX
+        )
+
+        result["reset_requested"] = True
+        result["reset_by"] = label
+        result["reset_propagated"] = False
+        result["restart_point"] = "A"
+        result["awaiting_human_restart"] = True
+        if round_number is not None:
+            result["round"] = round_number
+
+        record(
+            "relay_reset_requested",
+            chat=label,
+            stage=stage,
+            round=round_number,
+        )
+
+        validation_failure = validate(
+            counterpart_label,
+            counterpart_tab,
+            "reset_propagation",
+            round_number,
+        )
+        if validation_failure:
+            return validation_failure
+
+        record(
+            "relay_reset_propagation_started",
+            source_chat=label,
+            destination_chat=counterpart_label,
+            round=round_number,
+        )
+
+        try:
+            raw = send_and_wait(
+                counterpart_tab,
+                RESET_CHAT_COMMAND,
+                wait_timeout_ms=RELAY_RESPONSE_TIMEOUT_MS,
+                should_stop=lambda: control.state == "stopped",
+                expected_reply_prefix=expected_prefix,
+                expected_reply_suffix=expected_suffix,
+            )
+        except Exception as exc:
+            return fail(
+                "relay_reset_propagation_failed",
+                "reset_propagation",
+                round_number=round_number,
+                detail={
+                    "source_chat": label,
+                    "destination_chat": counterpart_label,
+                    "exception": str(exc),
+                },
+            )
+
+        reply, error = _completed_reply(raw)
+        if error == "chatgpt_wait_stopped":
+            return stopped("reset_propagation", round_number)
+        if error or not _is_reset_command((reply or {}).get("text")):
+            return fail(
+                "relay_reset_propagation_failed",
+                "reset_propagation",
+                round_number=round_number,
+                detail={
+                    "source_chat": label,
+                    "destination_chat": counterpart_label,
+                    "response_error": error,
+                    "response_text": (
+                        (reply or {}).get("text")
+                        if reply is not None
+                        else raw.get("response_text")
+                        if isinstance(raw, dict)
+                        else None
+                    ),
+                },
+            )
+
+        result["reset_propagated"] = True
+        result["reset_acknowledged_by"] = counterpart_label
+        record(
+            "relay_reset_propagated",
+            source_chat=label,
+            destination_chat=counterpart_label,
+            round=round_number,
+        )
+
+        transition(STOPPED)
+        result["status"] = "stopped"
+        result["stage"] = "reset"
+        record(
+            "relay_stopped",
+            stage="reset",
+            round=round_number,
+        )
+        return result
+
+    def external_reset_requested(label, tab_id, cached_turn):
+        if cached_turn is None:
+            return False
+
+        if callable(read_turn_state):
+            try:
+                state = read_turn_state(tab_id)
+            except Exception:
+                state = None
+            if isinstance(state, dict) and state.get("ok"):
+                user = state.get("user") or {}
+                if _is_reset_command(user.get("text")):
+                    return True
+
+        try:
+            raw = read_response(tab_id)
+        except Exception:
+            return False
+        latest, error = _initial_turn(raw)
+        if error or latest is None:
+            return False
+        if not _is_reset_command(latest.get("text")):
+            return False
+        return (
+            latest.get("turn_id") != cached_turn.get("turn_id")
+            or latest.get("turn_index") != cached_turn.get("turn_index")
+            or latest.get("text") != cached_turn.get("text")
+        )
 
     def checkpoint(stage, round_number=None):
         resume_state = result["state"]
@@ -341,6 +516,11 @@ def run_bidirectional_relay(
     if not isinstance(rounds, int) or isinstance(rounds, bool) or rounds < 1:
         return fail("relay_rounds_must_be_positive_integer", "prepare")
 
+    if getattr(control, "round_limit", None) is None:
+        setter = getattr(control, "set_round_limit", None)
+        if callable(setter):
+            setter(rounds)
+
     for label, tab_id in (("A", tab_a), ("B", tab_b)):
         validation_failure = validate(label, tab_id, "prepare")
         if validation_failure:
@@ -377,9 +557,52 @@ def run_bidirectional_relay(
         text_hash=turn_text_hash(current_a),
     )
 
+    # A marked starting response opts this relay run into the conversation-local
+    # Parley test protocol. Ordinary/production ChatGPT relays remain unchanged.
+    test_protocol = _has_reply_prefix(
+        current_a["text"],
+        TEST_A_REPLY_PREFIX,
+    )
+    result["test_protocol"] = test_protocol
+    if test_protocol:
+        if not _has_reply_suffix(
+            current_a["text"],
+            TEST_A_REPLY_SUFFIX,
+        ):
+            return fail(
+                "initial_test_reply_end_marker_missing",
+                "read_a",
+                detail={
+                    "expected_suffix": TEST_A_REPLY_SUFFIX,
+                    "response_text": current_a["text"],
+                },
+            )
+        result["test_protocol_terminal_markers"] = True
+        record(
+            "test_protocol_activated",
+            a_prefix=TEST_A_REPLY_PREFIX,
+            a_suffix=TEST_A_REPLY_SUFFIX,
+            b_prefix=TEST_B_REPLY_PREFIX,
+            b_suffix=TEST_B_REPLY_SUFFIX,
+        )
+
     current_b = None
 
-    for round_number in range(1, rounds + 1):
+    round_number = 1
+    observed_round_limit = current_round_limit()
+    while round_number <= current_round_limit():
+        active_round_limit = current_round_limit()
+        if active_round_limit != observed_round_limit:
+            if active_round_limit > observed_round_limit:
+                record(
+                    "relay_round_limit_extended",
+                    previous_round_limit=observed_round_limit,
+                    round_limit=active_round_limit,
+                    round=round_number,
+                )
+            observed_round_limit = active_round_limit
+        result["rounds_requested"] = active_round_limit
+
         transition(TRANSFER_A_TO_B)
 
         checkpoint_result = checkpoint(
@@ -398,6 +621,23 @@ def run_bidirectional_relay(
             )
             if validation_failure:
                 return validation_failure
+
+        if test_protocol:
+            if external_reset_requested("A", tab_a, current_a):
+                return coordinated_reset(
+                    "A",
+                    "a_to_b",
+                    round_number,
+                )
+            if (
+                current_b is not None
+                and external_reset_requested("B", tab_b, current_b)
+            ):
+                return coordinated_reset(
+                    "B",
+                    "a_to_b",
+                    round_number,
+                )
 
         fingerprint = claim(
             tab_a,
@@ -422,8 +662,37 @@ def run_bidirectional_relay(
             fingerprint=fingerprint,
         )
 
+        delivery_text = current_a["text"]
+        if round_number == 1 and str(initial_context or "").strip():
+            shared_context = str(initial_context).strip()
+            delivery_text = (
+                "PARLEY SESSION BRIEF "
+                "(human-provided; applies to both Chat A and Chat B):\n"
+                + shared_context
+                + "\n\nCHAT A OPENING REPLY:\n"
+                + current_a["text"]
+            )
+            record(
+                "initial_context_attached",
+                round=round_number,
+                direction="A->B",
+                context_chars=len(shared_context),
+                context_hash=turn_text_hash({"text": shared_context}),
+                delivered_chars=len(delivery_text),
+            )
+
         try:
-            b_raw = send_and_wait(tab_b, current_a["text"])
+            if test_protocol:
+                b_raw = send_and_wait(
+                    tab_b,
+                    delivery_text,
+                    wait_timeout_ms=RELAY_RESPONSE_TIMEOUT_MS,
+                    should_stop=lambda: control.state == "stopped",
+                    expected_reply_prefix=TEST_B_REPLY_PREFIX,
+                    expected_reply_suffix=TEST_B_REPLY_SUFFIX,
+                )
+            else:
+                b_raw = send_and_wait(tab_b, delivery_text)
         except Exception as exc:
             return fail(
                 "relay_transfer_exception",
@@ -434,12 +703,37 @@ def run_bidirectional_relay(
 
         current_b, error = _completed_reply(b_raw)
         if error:
+            if error == "chatgpt_wait_stopped":
+                return stopped("a_to_b", round_number)
             return fail(
                 error,
                 "a_to_b",
                 round_number=round_number,
                 detail=b_raw,
             )
+
+        if test_protocol:
+            if _is_reset_command(current_b["text"]):
+                return coordinated_reset(
+                    "B",
+                    "a_to_b",
+                    round_number,
+                )
+            if not _has_reply_markers(
+                current_b["text"],
+                TEST_B_REPLY_PREFIX,
+                TEST_B_REPLY_SUFFIX,
+            ):
+                return fail(
+                    "relay_test_reply_marker_missing",
+                    "a_to_b",
+                    round_number=round_number,
+                    detail={
+                        "expected_prefix": TEST_B_REPLY_PREFIX,
+                        "expected_suffix": TEST_B_REPLY_SUFFIX,
+                        "response_text": current_b["text"],
+                    },
+                )
 
         transfer = _transfer_record(
             round_number,
@@ -472,6 +766,20 @@ def run_bidirectional_relay(
             if validation_failure:
                 return validation_failure
 
+        if test_protocol:
+            if external_reset_requested("B", tab_b, current_b):
+                return coordinated_reset(
+                    "B",
+                    "b_to_a",
+                    round_number,
+                )
+            if external_reset_requested("A", tab_a, current_a):
+                return coordinated_reset(
+                    "A",
+                    "b_to_a",
+                    round_number,
+                )
+
         fingerprint = claim(
             tab_b,
             tab_a,
@@ -496,7 +804,17 @@ def run_bidirectional_relay(
         )
 
         try:
-            a_raw = send_and_wait(tab_a, current_b["text"])
+            if test_protocol:
+                a_raw = send_and_wait(
+                    tab_a,
+                    current_b["text"],
+                    wait_timeout_ms=RELAY_RESPONSE_TIMEOUT_MS,
+                    should_stop=lambda: control.state == "stopped",
+                    expected_reply_prefix=TEST_A_REPLY_PREFIX,
+                    expected_reply_suffix=TEST_A_REPLY_SUFFIX,
+                )
+            else:
+                a_raw = send_and_wait(tab_a, current_b["text"])
         except Exception as exc:
             return fail(
                 "relay_transfer_exception",
@@ -507,12 +825,37 @@ def run_bidirectional_relay(
 
         next_a, error = _completed_reply(a_raw)
         if error:
+            if error == "chatgpt_wait_stopped":
+                return stopped("b_to_a", round_number)
             return fail(
                 error,
                 "b_to_a",
                 round_number=round_number,
                 detail=a_raw,
             )
+
+        if test_protocol:
+            if _is_reset_command(next_a["text"]):
+                return coordinated_reset(
+                    "A",
+                    "b_to_a",
+                    round_number,
+                )
+            if not _has_reply_markers(
+                next_a["text"],
+                TEST_A_REPLY_PREFIX,
+                TEST_A_REPLY_SUFFIX,
+            ):
+                return fail(
+                    "relay_test_reply_marker_missing",
+                    "b_to_a",
+                    round_number=round_number,
+                    detail={
+                        "expected_prefix": TEST_A_REPLY_PREFIX,
+                        "expected_suffix": TEST_A_REPLY_SUFFIX,
+                        "response_text": next_a["text"],
+                    },
+                )
 
         transfer = _transfer_record(
             round_number,
@@ -528,7 +871,58 @@ def run_bidirectional_relay(
 
         current_a = next_a
         result["rounds_completed"] = round_number
+        round_number += 1
 
+        if round_number > current_round_limit():
+            reached_limit = current_round_limit()
+            result["rounds_requested"] = reached_limit
+            record(
+                "relay_round_limit_reached",
+                round_limit=reached_limit,
+                rounds_completed=result["rounds_completed"],
+            )
+
+            waiter = getattr(
+                control,
+                "wait_for_round_limit_decision",
+                None,
+            )
+            if callable(waiter):
+                decision = waiter(result["rounds_completed"])
+            else:
+                decision = "finish"
+
+            if decision == "stopped":
+                return stopped(
+                    "round_limit",
+                    result["rounds_completed"],
+                )
+
+            if (
+                isinstance(decision, str)
+                and decision.startswith("reset:")
+            ):
+                return coordinated_reset(
+                    decision.split(":", 1)[1],
+                    "round_limit",
+                    result["rounds_completed"],
+                )
+
+            if decision == "extended":
+                new_limit = current_round_limit()
+                result["rounds_requested"] = new_limit
+                record(
+                    "relay_round_limit_extended",
+                    previous_round_limit=reached_limit,
+                    round_limit=new_limit,
+                    round=round_number,
+                )
+                observed_round_limit = new_limit
+                continue
+
+            break
+
+    result["rounds_requested"] = current_round_limit()
     transition(COMPLETE)
     result["status"] = "complete"
     result["latest_a"] = current_a

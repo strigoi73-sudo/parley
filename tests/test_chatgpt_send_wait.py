@@ -32,14 +32,35 @@ class ChatGPTSendAndWaitTests(unittest.TestCase):
     def setUp(self):
         self.adapter = ChatGPTAdapter()
 
-    def run_transaction(self, states, timeout_ms=3000, silence_ms=200):
+    def run_transaction(
+        self,
+        states,
+        timeout_ms=3000,
+        silence_ms=200,
+        expected_reply_prefix=None,
+        expected_reply_suffix=None,
+        should_stop=None,
+        pre_state_override=None,
+        require_user_text_match=True,
+        submission_timeout_ms=10000,
+        retry_unsent_submission=False,
+        required_attachment_filename=None,
+        submission_retry_interval_ms=2000,
+        max_submission_attempts=4,
+    ):
         ws = FakeSocket()
         clock = FakeClock()
         state_queue = list(states)
         calls = []
 
-        def fake_cdp_send(_ws, method, params=None, timeout=10):
-            calls.append((method, params))
+        def fake_cdp_send(
+            _ws,
+            method,
+            params=None,
+            timeout=10,
+            should_stop=None,
+        ):
+            calls.append((method, params, timeout, should_stop))
             if method == "Input.insertText":
                 return {}
 
@@ -55,6 +76,19 @@ class ChatGPTSendAndWaitTests(unittest.TestCase):
                     "source": "chatgpt-strict",
                     "method": "chatgpt-send-button",
                 })
+            if (
+                isinstance(expression, str)
+                and "chatgpt-unsent-submission" in expression
+            ):
+                return runtime_value({
+                    "ok": True,
+                    "source": "chatgpt-unsent-submission",
+                    "exactText": True,
+                    "sendEnabled": True,
+                    "hasStopButton": False,
+                    "attachmentPresent": True,
+                    "composerChars": 5,
+                })
             if expression == self.adapter.turn_state_js:
                 if len(state_queue) > 1:
                     value = state_queue.pop(0)
@@ -64,11 +98,30 @@ class ChatGPTSendAndWaitTests(unittest.TestCase):
 
             raise AssertionError("unexpected CDP call: %r" % ((method, params),))
 
+        def fake_focus(
+            _tab_id,
+            enabled=True,
+            timeout=None,
+            ws=None,
+            should_stop=None,
+        ):
+            calls.append((
+                "Emulation.setFocusEmulationEnabled",
+                {"enabled": bool(enabled)},
+                timeout,
+                should_stop,
+            ))
+            return {"ok": True, "enabled": bool(enabled)}
+
         with mock.patch.object(
             workflows,
             "cdp_connect",
             return_value=ws,
         ) as connect, mock.patch.object(
+            workflows.core,
+            "set_focus_emulation",
+            side_effect=fake_focus,
+        ), mock.patch.object(
             workflows,
             "cdp_send",
             side_effect=fake_cdp_send,
@@ -87,9 +140,339 @@ class ChatGPTSendAndWaitTests(unittest.TestCase):
                 wait_timeout_ms=timeout_ms,
                 silence_ms=silence_ms,
                 adapter=self.adapter,
+                expected_reply_prefix=expected_reply_prefix,
+                expected_reply_suffix=expected_reply_suffix,
+                should_stop=should_stop,
+                pre_state_override=pre_state_override,
+                require_user_text_match=require_user_text_match,
+                submission_timeout_ms=submission_timeout_ms,
+                retry_unsent_submission=retry_unsent_submission,
+                required_attachment_filename=required_attachment_filename,
+                submission_retry_interval_ms=submission_retry_interval_ms,
+                max_submission_attempts=max_submission_attempts,
             )
 
         return result, ws, connect, calls
+
+    def test_strict_transaction_uses_no_cdp_command_deadlines(self):
+        old = {
+            "ok": True,
+            "source": "chatgpt-strict",
+            "assistant_count": 1,
+            "user_count": 1,
+            "assistant": {
+                "text": "old reply",
+                "turn_id": "assistant-old",
+                "turn_index": 0,
+                "hasStreaming": False,
+            },
+            "user": {
+                "text": "old prompt",
+                "turn_id": "user-old",
+                "turn_index": 0,
+            },
+            "hasStopButton": False,
+        }
+        submitted = {
+            **old,
+            "user_count": 2,
+            "user": {
+                "text": "hello",
+                "turn_id": "user-new",
+                "turn_index": 1,
+            },
+        }
+        final = {
+            **submitted,
+            "assistant_count": 2,
+            "assistant": {
+                "text": "B REPLY: complete\n\nB REPLY END",
+                "turn_id": "assistant-new",
+                "turn_index": 1,
+                "hasStreaming": False,
+            },
+        }
+
+        result, _, _, calls = self.run_transaction(
+            [old, submitted, final, final],
+            timeout_ms=None,
+            silence_ms=0,
+            expected_reply_prefix="B REPLY:",
+            expected_reply_suffix="B REPLY END",
+            should_stop=lambda: False,
+        )
+
+        self.assertTrue(result["response_complete"])
+        self.assertTrue(calls)
+        for _, _, timeout, should_stop in calls:
+            self.assertIsNone(timeout)
+            self.assertTrue(callable(should_stop))
+
+    def test_timeout_free_marked_wait_stops_only_on_control_signal(self):
+        pre = {
+            "ok": True,
+            "source": "chatgpt-strict",
+            "assistant_count": 1,
+            "user_count": 1,
+            "assistant": {
+                "text": "A REPLY: old\n\nA REPLY END",
+                "turn_id": "assistant-old",
+                "turn_index": 0,
+                "hasStreaming": False,
+            },
+            "user": {
+                "text": "old prompt",
+                "turn_id": "user-old",
+                "turn_index": 0,
+            },
+            "hasStopButton": False,
+        }
+        submitted = {
+            **pre,
+            "user_count": 2,
+            "user": {
+                "text": "hello",
+                "turn_id": "user-submitted",
+                "turn_index": 1,
+            },
+        }
+
+        checks = {"count": 0}
+
+        def should_stop():
+            checks["count"] += 1
+            return checks["count"] >= 8
+
+        result, _, _, _ = self.run_transaction(
+            [pre, submitted, submitted],
+            timeout_ms=None,
+            silence_ms=100,
+            expected_reply_prefix="B REPLY:",
+            expected_reply_suffix="B REPLY END",
+            should_stop=should_stop,
+        )
+
+        self.assertFalse(result["response_complete"])
+        self.assertEqual(result["error"], "chatgpt_wait_stopped")
+        self.assertGreaterEqual(checks["count"], 8)
+
+    def test_submission_timeout_is_bounded_independently(self):
+        pre = {
+            "ok": True,
+            "source": "chatgpt-strict",
+            "assistant_count": 0,
+            "user_count": 0,
+            "assistant": None,
+            "user": None,
+            "hasStopButton": False,
+        }
+
+        result, _, _, _ = self.run_transaction(
+            [pre],
+            timeout_ms=None,
+            submission_timeout_ms=500,
+        )
+
+        self.assertFalse(result["response_complete"])
+        self.assertEqual(
+            result["error"],
+            "chatgpt_submission_not_verified",
+        )
+        self.assertGreaterEqual(
+            result["response_duration_ms"],
+            500,
+        )
+        self.assertLess(
+            result["response_duration_ms"],
+            1000,
+        )
+
+    def test_attachment_ack_retries_only_while_composer_is_unsent(self):
+        pre = {
+            "ok": True,
+            "source": "chatgpt-strict",
+            "assistant_count": 0,
+            "user_count": 1,
+            "assistant": None,
+            "user": {
+                "text": "INITIAL PROMPT.  DO NOT REPLY.",
+                "turn_id": "seed-user",
+                "turn_index": 0,
+            },
+            "hasStopButton": False,
+        }
+        submitted = {
+            **pre,
+            "user_count": 2,
+            "user": {
+                "text": "protocol receipt request",
+                "turn_id": "ack-user",
+                "turn_index": 1,
+            },
+        }
+        final = {
+            **submitted,
+            "assistant_count": 1,
+            "assistant": {
+                "text": "PARLEY PROTOCOL B RECEIVED",
+                "turn_id": "ack-assistant",
+                "turn_index": 0,
+                "hasStreaming": False,
+            },
+            "hasStopButton": False,
+        }
+
+        waiting_states = [pre] * 22
+        result, _, _, calls = self.run_transaction(
+            waiting_states + [submitted, final, final],
+            timeout_ms=10000,
+            silence_ms=0,
+            pre_state_override=pre,
+            require_user_text_match=False,
+            expected_reply_prefix="PARLEY PROTOCOL B RECEIVED",
+            expected_reply_suffix="PARLEY PROTOCOL B RECEIVED",
+            retry_unsent_submission=True,
+            required_attachment_filename="PARLEY_TEST_CHAT_B_PROTOCOL.md",
+            submission_retry_interval_ms=2000,
+            max_submission_attempts=3,
+        )
+
+        self.assertTrue(result["response_complete"])
+        self.assertGreaterEqual(
+            result["submission_attempts"],
+            2,
+        )
+        send_clicks = [
+            call for call in calls
+            if (
+                call[0] == "Runtime.evaluate"
+                and (call[1] or {}).get("expression")
+                == self.adapter.click_send_js
+            )
+        ]
+        self.assertGreaterEqual(len(send_clicks), 2)
+
+    def test_exact_ack_marker_ignores_thinking_surface(self):
+        pre = {
+            "ok": True,
+            "source": "chatgpt-strict",
+            "assistant_count": 0,
+            "user_count": 0,
+            "assistant": None,
+            "user": None,
+            "hasStopButton": False,
+        }
+        submitted = {
+            **pre,
+            "user_count": 1,
+            "user": {
+                "text": "protocol receipt request",
+                "turn_id": "user-file-turn",
+                "turn_index": 0,
+            },
+        }
+        thinking = {
+            **submitted,
+            "assistant_count": 1,
+            "assistant": {
+                "text": "Thinking",
+                "turn_id": "assistant-thinking",
+                "turn_index": 0,
+                "hasStreaming": True,
+            },
+            "hasStopButton": True,
+        }
+        final = {
+            **submitted,
+            "assistant_count": 1,
+            "assistant": {
+                "text": "PARLEY PROTOCOL A RECEIVED",
+                "turn_id": "assistant-ack",
+                "turn_index": 0,
+                "hasStreaming": False,
+            },
+            "hasStopButton": False,
+        }
+
+        result, _, _, _ = self.run_transaction(
+            [
+                submitted,
+                thinking,
+                final,
+                final,
+            ],
+            silence_ms=0,
+            pre_state_override=pre,
+            require_user_text_match=False,
+            expected_reply_prefix="PARLEY PROTOCOL A RECEIVED",
+            expected_reply_suffix="PARLEY PROTOCOL A RECEIVED",
+        )
+
+        self.assertTrue(result["response_complete"])
+        self.assertEqual(
+            result["response_text"],
+            "PARLEY PROTOCOL A RECEIVED",
+        )
+        self.assertEqual(
+            result["expected_reply_prefix"],
+            "PARLEY PROTOCOL A RECEIVED",
+        )
+        self.assertEqual(
+            result["expected_reply_suffix"],
+            "PARLEY PROTOCOL A RECEIVED",
+        )
+
+    def test_pre_attachment_boundary_allows_attachment_rendered_user_text(self):
+        pre = {
+            "ok": True,
+            "source": "chatgpt-strict",
+            "assistant_count": 0,
+            "user_count": 0,
+            "assistant": None,
+            "user": None,
+            "hasStopButton": False,
+        }
+        submitted = {
+            **pre,
+            "user_count": 1,
+            "user": {
+                "text": "protocol A received",
+                "turn_id": "user-file-turn",
+                "turn_index": 0,
+            },
+        }
+        started = {
+            **submitted,
+            "assistant_count": 1,
+            "assistant": {
+                "text": "PARLEY PROTOCOL A RECEIVED",
+                "turn_id": "assistant-ack",
+                "turn_index": 0,
+                "hasStreaming": True,
+            },
+            "hasStopButton": True,
+        }
+        finished = {
+            **started,
+            "assistant": {
+                **started["assistant"],
+                "hasStreaming": False,
+            },
+            "hasStopButton": False,
+        }
+
+        result, _, _, _ = self.run_transaction(
+            [submitted, started, finished, finished],
+            silence_ms=0,
+            pre_state_override=pre,
+            require_user_text_match=False,
+        )
+
+        self.assertTrue(result["response_complete"])
+        self.assertEqual(
+            result["response_text"],
+            "PARLEY PROTOCOL A RECEIVED",
+        )
 
     def test_completed_new_turn_uses_one_connection(self):
         old = {
@@ -136,7 +519,7 @@ class ChatGPTSendAndWaitTests(unittest.TestCase):
             silence_ms=200,
         )
 
-        connect.assert_called_once_with("tab-a")
+        connect.assert_called_once_with("tab-a", timeout=None)
         self.assertTrue(ws.closed)
         self.assertTrue(result["response_complete"])
         self.assertEqual(result["response_text"], "new reply")
@@ -177,6 +560,52 @@ class ChatGPTSendAndWaitTests(unittest.TestCase):
             "chatgpt_new_assistant_turn_timeout",
         )
         self.assertEqual(result["stage"], "wait_for_response")
+
+    def test_same_user_id_with_exact_new_text_still_proves_submission(self):
+        pre = {
+            "ok": True,
+            "source": "chatgpt-strict",
+            "assistant_count": 1,
+            "user_count": 1,
+            "assistant": {
+                "text": "old reply",
+                "turn_id": "assistant-old",
+                "turn_index": 0,
+                "hasStreaming": False,
+            },
+            "user": {
+                "text": "old prompt",
+                "turn_id": "user-reused",
+                "turn_index": 0,
+            },
+            "hasStopButton": False,
+        }
+        submitted = {
+            **pre,
+            "user": {
+                "text": "hello",
+                "turn_id": "user-reused",
+                "turn_index": 0,
+            },
+        }
+        reply = {
+            **submitted,
+            "assistant_count": 2,
+            "assistant": {
+                "text": "new reply",
+                "turn_id": "assistant-new",
+                "turn_index": 1,
+                "hasStreaming": False,
+            },
+        }
+
+        result, _, _, _ = self.run_transaction(
+            [pre, submitted, reply, reply, reply],
+            silence_ms=200,
+        )
+
+        self.assertTrue(result["response_complete"])
+        self.assertEqual(result["response_text"], "new reply")
 
     def test_submission_must_be_proven_by_new_user_turn(self):
         pre = {
@@ -237,6 +666,520 @@ class ChatGPTSendAndWaitTests(unittest.TestCase):
         self.assertEqual(result["response_text"], "first reply")
         self.assertEqual(result["response_turn_index"], 0)
 
+    def test_transient_thinking_turn_may_be_replaced_by_final_answer(self):
+        old = {
+            "ok": True,
+            "source": "chatgpt-strict",
+            "assistant_count": 1,
+            "user_count": 1,
+            "assistant": {
+                "text": "old reply",
+                "turn_id": "assistant-old",
+                "turn_index": 0,
+                "hasStreaming": False,
+            },
+            "hasStopButton": False,
+        }
+        submitted = {
+            **old,
+            "user_count": 2,
+        }
+        thinking = {
+            "ok": True,
+            "source": "chatgpt-strict",
+            "assistant_count": 2,
+            "user_count": 2,
+            "assistant": {
+                "text": "Thinking",
+                "turn_id": "assistant-thinking",
+                "turn_index": 1,
+                "hasStreaming": True,
+            },
+            "hasStopButton": True,
+        }
+        final = {
+            "ok": True,
+            "source": "chatgpt-strict",
+            "assistant_count": 2,
+            "user_count": 2,
+            "assistant": {
+                "text": "real final reply",
+                "turn_id": "assistant-final",
+                "turn_index": 1,
+                "hasStreaming": False,
+            },
+            "hasStopButton": False,
+        }
+
+        result, _, _, _ = self.run_transaction(
+            [old, submitted, thinking, final, final],
+            silence_ms=200,
+        )
+
+        self.assertTrue(result["response_complete"])
+        self.assertEqual(result["response_text"], "real final reply")
+        self.assertEqual(result["response_turn_id"], "assistant-final")
+        self.assertEqual(result["response_turn_index"], 1)
+        self.assertEqual(result["response_candidate_replacements"], 1)
+
+    def test_exact_reset_message_interrupts_marked_response_cleanly(self):
+        old = {
+            "ok": True,
+            "source": "chatgpt-strict",
+            "assistant_count": 1,
+            "user_count": 1,
+            "assistant": {
+                "text": "A REPLY: old answer\n\nA REPLY END",
+                "turn_id": "assistant-old",
+                "turn_index": 0,
+                "hasStreaming": False,
+            },
+            "user": {
+                "text": "old prompt",
+                "turn_id": "user-old",
+                "turn_index": 0,
+            },
+            "hasStopButton": False,
+        }
+        submitted = {
+            **old,
+            "user_count": 2,
+            "user": {
+                "text": "hello",
+                "turn_id": "user-submitted",
+                "turn_index": 1,
+            },
+        }
+        started = {
+            **submitted,
+            "assistant_count": 2,
+            "assistant": {
+                "text": "B REPLY: partial",
+                "turn_id": "assistant-partial",
+                "turn_index": 1,
+                "hasStreaming": True,
+            },
+            "hasStopButton": True,
+        }
+        reset_user = {
+            **started,
+            "user_count": 3,
+            "user": {
+                "text": "RESET CHAT",
+                "turn_id": "user-reset",
+                "turn_index": 2,
+            },
+        }
+        reset_reply = {
+            **reset_user,
+            "assistant_count": 3,
+            "assistant": {
+                "text": "RESET CHAT",
+                "turn_id": "assistant-reset",
+                "turn_index": 2,
+                "hasStreaming": False,
+            },
+            "hasStopButton": False,
+        }
+
+        result, _, _, _ = self.run_transaction(
+            [
+                old,
+                submitted,
+                started,
+                reset_user,
+                reset_reply,
+                reset_reply,
+            ],
+            silence_ms=200,
+            expected_reply_prefix="B REPLY:",
+            expected_reply_suffix="B REPLY END",
+        )
+
+        self.assertTrue(result["response_complete"])
+        self.assertEqual(result["response_text"], "RESET CHAT")
+        self.assertTrue(result["human_reset_requested"])
+
+    def test_new_user_turn_during_response_still_fails_closed(self):
+        pre = {
+            "ok": True,
+            "source": "chatgpt-strict",
+            "assistant_count": 0,
+            "user_count": 0,
+            "assistant": None,
+            "hasStopButton": False,
+        }
+        submitted = {
+            **pre,
+            "user_count": 1,
+        }
+        started = {
+            "ok": True,
+            "source": "chatgpt-strict",
+            "assistant_count": 1,
+            "user_count": 1,
+            "assistant": {
+                "text": "partial reply",
+                "turn_id": "assistant-new",
+                "turn_index": 0,
+                "hasStreaming": True,
+            },
+            "hasStopButton": True,
+        }
+        extra_user = {
+            **started,
+            "user_count": 2,
+        }
+
+        result, _, _, _ = self.run_transaction(
+            [pre, submitted, started, extra_user],
+            silence_ms=100,
+        )
+
+        self.assertFalse(result["response_complete"])
+        self.assertEqual(
+            result["error"],
+            "chatgpt_user_turn_changed_during_response",
+        )
+        self.assertEqual(result["stage"], "track_response")
+
+    def test_user_count_rerender_keeps_same_submitted_user_turn(self):
+        old = {
+            "ok": True,
+            "source": "chatgpt-strict",
+            "assistant_count": 1,
+            "user_count": 1,
+            "assistant": {
+                "text": "old reply",
+                "turn_id": "assistant-old",
+                "turn_index": 0,
+                "hasStreaming": False,
+            },
+            "user": {
+                "text": "old prompt",
+                "turn_id": "user-old",
+                "turn_index": 0,
+            },
+            "hasStopButton": False,
+        }
+        submitted = {
+            **old,
+            "user_count": 3,
+            "user": {
+                "text": "hello",
+                "turn_id": "user-submitted",
+                "turn_index": 2,
+            },
+        }
+        started = {
+            "ok": True,
+            "source": "chatgpt-strict",
+            "assistant_count": 2,
+            "user_count": 3,
+            "assistant": {
+                "text": "partial",
+                "turn_id": "assistant-new",
+                "turn_index": 1,
+                "hasStreaming": True,
+            },
+            "user": {
+                "text": "hello",
+                "turn_id": "user-submitted",
+                "turn_index": 2,
+            },
+            "hasStopButton": True,
+        }
+        rerendered = {
+            **started,
+            "user_count": 2,
+            "user": {
+                "text": "hello",
+                "turn_id": "user-rerendered",
+                "turn_index": 1,
+            },
+            "assistant": {
+                "text": "final reply",
+                "turn_id": "assistant-new",
+                "turn_index": 1,
+                "hasStreaming": False,
+            },
+            "hasStopButton": False,
+        }
+
+        result, _, _, _ = self.run_transaction(
+            [
+                old,
+                submitted,
+                started,
+                rerendered,
+                rerendered,
+            ],
+            silence_ms=200,
+        )
+
+        self.assertTrue(result["response_complete"])
+        self.assertEqual(result["response_text"], "final reply")
+        self.assertEqual(result["post_user_count"], 2)
+        self.assertEqual(
+            result["submitted_user_turn_id"],
+            "user-submitted",
+        )
+
+    def test_different_user_turn_id_fails_even_if_count_is_unchanged(self):
+        pre = {
+            "ok": True,
+            "source": "chatgpt-strict",
+            "assistant_count": 0,
+            "user_count": 1,
+            "assistant": None,
+            "user": {
+                "text": "old prompt",
+                "turn_id": "user-old",
+                "turn_index": 0,
+            },
+            "hasStopButton": False,
+        }
+        submitted = {
+            **pre,
+            "user_count": 2,
+            "user": {
+                "text": "hello",
+                "turn_id": "user-submitted",
+                "turn_index": 1,
+            },
+        }
+        started = {
+            "ok": True,
+            "source": "chatgpt-strict",
+            "assistant_count": 1,
+            "user_count": 2,
+            "assistant": {
+                "text": "partial",
+                "turn_id": "assistant-new",
+                "turn_index": 0,
+                "hasStreaming": True,
+            },
+            "user": {
+                "text": "hello",
+                "turn_id": "user-submitted",
+                "turn_index": 1,
+            },
+            "hasStopButton": True,
+        }
+        changed_user = {
+            **started,
+            "user": {
+                "text": "another message",
+                "turn_id": "user-other",
+                "turn_index": 1,
+            },
+        }
+
+        result, _, _, _ = self.run_transaction(
+            [pre, submitted, started, changed_user],
+            silence_ms=100,
+        )
+
+        self.assertFalse(result["response_complete"])
+        self.assertEqual(
+            result["error"],
+            "chatgpt_user_turn_changed_during_response",
+        )
+        self.assertEqual(
+            result["expected_user_turn_id"],
+            "user-submitted",
+        )
+        self.assertEqual(
+            result["current_user_turn_id"],
+            "user-other",
+        )
+
+    def test_marked_reply_ignores_thinking_and_temporary_old_turn(self):
+        old = {
+            "ok": True,
+            "source": "chatgpt-strict",
+            "assistant_count": 1,
+            "user_count": 1,
+            "assistant": {
+                "text": "A REPLY: old answer",
+                "turn_id": "assistant-old",
+                "turn_index": 0,
+                "hasStreaming": False,
+            },
+            "user": {
+                "text": "old prompt",
+                "turn_id": "user-old",
+                "turn_index": 0,
+            },
+            "hasStopButton": False,
+        }
+        submitted = {
+            **old,
+            "user_count": 2,
+            "user": {
+                "text": "hello",
+                "turn_id": "user-submitted",
+                "turn_index": 1,
+            },
+        }
+        thinking = {
+            **submitted,
+            "assistant_count": 2,
+            "assistant": {
+                "text": "Thinking",
+                "turn_id": "assistant-thinking",
+                "turn_index": 1,
+                "hasStreaming": True,
+            },
+            "hasStopButton": True,
+        }
+        rollback = {
+            **submitted,
+            "assistant_count": 1,
+            "assistant": old["assistant"],
+            "hasStopButton": False,
+        }
+        partial_marked = {
+            **submitted,
+            "assistant_count": 2,
+            "assistant": {
+                "text": "B REPLY: final answer is still being rendered",
+                "turn_id": "assistant-final",
+                "turn_index": 1,
+                "hasStreaming": False,
+            },
+            "hasStopButton": False,
+        }
+        marker_not_terminal = {
+            **submitted,
+            "assistant_count": 2,
+            "assistant": {
+                "text": (
+                    "B REPLY: answer body\n\n"
+                    "B REPLY END\nextra streamed text"
+                ),
+                "turn_id": "assistant-final",
+                "turn_index": 1,
+                "hasStreaming": False,
+            },
+            "hasStopButton": False,
+        }
+        final = {
+            **submitted,
+            "assistant_count": 2,
+            "assistant": {
+                "text": (
+                    "B REPLY: final answer is complete\n\n"
+                    "B REPLY END"
+                ),
+                "turn_id": "assistant-final",
+                "turn_index": 1,
+                "hasStreaming": False,
+            },
+            "hasStopButton": False,
+        }
+
+        result, _, _, _ = self.run_transaction(
+            [
+                old,
+                submitted,
+                thinking,
+                rollback,
+                partial_marked,
+                marker_not_terminal,
+                final,
+                final,
+            ],
+            silence_ms=200,
+            expected_reply_prefix="B REPLY:",
+            expected_reply_suffix="B REPLY END",
+        )
+
+        self.assertTrue(result["response_complete"])
+        self.assertEqual(
+            result["response_text"],
+            "B REPLY: final answer is complete\n\nB REPLY END",
+        )
+        self.assertEqual(result["response_turn_id"], "assistant-final")
+        self.assertEqual(result["expected_reply_prefix"], "B REPLY:")
+        self.assertEqual(result["expected_reply_suffix"], "B REPLY END")
+
+    def test_prefix_only_marked_reply_ignores_thinking_and_rollback(self):
+        old = {
+            "ok": True,
+            "source": "chatgpt-strict",
+            "assistant_count": 1,
+            "user_count": 1,
+            "assistant": {
+                "text": "A REPLY: old answer",
+                "turn_id": "assistant-old",
+                "turn_index": 0,
+                "hasStreaming": False,
+            },
+            "user": {
+                "text": "old prompt",
+                "turn_id": "user-old",
+                "turn_index": 0,
+            },
+            "hasStopButton": False,
+        }
+        submitted = {
+            **old,
+            "user_count": 2,
+            "user": {
+                "text": "hello",
+                "turn_id": "user-submitted",
+                "turn_index": 1,
+            },
+        }
+        thinking = {
+            **submitted,
+            "assistant_count": 2,
+            "assistant": {
+                "text": "Thinking",
+                "turn_id": "assistant-thinking",
+                "turn_index": 1,
+                "hasStreaming": True,
+            },
+            "hasStopButton": True,
+        }
+        rollback = {
+            **submitted,
+            "assistant_count": 1,
+            "assistant": old["assistant"],
+            "hasStopButton": False,
+        }
+        final = {
+            **submitted,
+            "assistant_count": 2,
+            "assistant": {
+                "text": "B REPLY: final answer",
+                "turn_id": "assistant-final",
+                "turn_index": 1,
+                "hasStreaming": False,
+            },
+            "hasStopButton": False,
+        }
+
+        result, _, _, _ = self.run_transaction(
+            [
+                old,
+                submitted,
+                thinking,
+                rollback,
+                final,
+                final,
+            ],
+            silence_ms=200,
+            expected_reply_prefix="B REPLY:",
+        )
+
+        self.assertTrue(result["response_complete"])
+        self.assertEqual(result["response_text"], "B REPLY: final answer")
+        self.assertEqual(result["response_turn_id"], "assistant-final")
+        self.assertEqual(result["expected_reply_prefix"], "B REPLY:")
+        self.assertIsNone(result["expected_reply_suffix"])
+
     def test_dispatcher_routes_chatgpt_to_strict_transaction(self):
         expected = {
             "response_text": "reply",
@@ -265,6 +1208,9 @@ class ChatGPTSendAndWaitTests(unittest.TestCase):
             wait_timeout_ms=1234,
             silence_ms=321,
             adapter=self.adapter,
+            expected_reply_prefix=None,
+            expected_reply_suffix=None,
+            should_stop=None,
         )
 
 

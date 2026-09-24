@@ -16,13 +16,18 @@ class RelaySession:
         rounds,
         *,
         include_text=False,
+        initial_context=None,
     ):
         self.bridge = bridge
         self.tab_a = tab_a
         self.tab_b = tab_b
         self.rounds = rounds
         self.include_text = include_text
-        self.control = RelayControl()
+        self.initial_context = initial_context
+        self.control = RelayControl(
+            round_limit=rounds,
+            confirm_round_limit=True,
+        )
 
         self._lock = threading.Lock()
         self._thread = None
@@ -56,6 +61,7 @@ class RelaySession:
                 control=self.control,
                 include_text=self.include_text,
                 event_sink=self._on_event,
+                initial_context=self.initial_context,
             )
             with self._lock:
                 self._result = result
@@ -88,6 +94,15 @@ class RelaySession:
     def stop(self):
         self.control.stop()
 
+    def extend_rounds(self, new_total):
+        return self.control.extend_round_limit(new_total)
+
+    def request_reset(self, label):
+        return self.control.request_reset(label)
+
+    def finish_at_round_limit(self):
+        self.control.finish_at_round_limit()
+
     def is_alive(self):
         with self._lock:
             thread = self._thread
@@ -109,6 +124,16 @@ class RelaySession:
     def exception(self):
         with self._lock:
             return self._exception
+
+    def events(self):
+        """Return a snapshot of relay events for UI/observer catch-up."""
+        with self._lock:
+            return [dict(item) for item in self._events]
+
+    def transfers(self):
+        """Return a snapshot of completed transfers for UI transcripts."""
+        with self._lock:
+            return [dict(item) for item in self._transfers]
 
     def status(self):
         with self._lock:
@@ -134,8 +159,13 @@ class RelaySession:
             "control": self.control.state,
             "tab_a": self.tab_a,
             "tab_b": self.tab_b,
-            "rounds_requested": self.rounds,
+            "rounds_requested": (
+                self.control.round_limit
+                if self.control.round_limit is not None
+                else self.rounds
+            ),
             "rounds_completed": rounds_completed,
+            "awaiting_extension": self.control.awaiting_round_extension,
             "transfers_completed": len(transfers),
             "last_transfer": last_transfer,
             "error": str(exception) if exception else (

@@ -580,13 +580,13 @@ Status: **Complete**
 
 ### Phase 1 — Browser session layer
 
-Status: **Prototype proven; production design still needed**
+Status: **Production transport verified; second live smoke exposed transient user-turn count/identity churn; fix implemented, pending local re-verification and smoke rerun**
 
 Deliverables:
 
 - one persistent browser-level live CDP connection;
 - tab enumeration;
-- stable A/B target sessions;
+- serialized flattened target sessions that remain stable for each browser transaction;
 - minimal reconnect behavior;
 - reduced Chrome approval prompts;
 - tests for target/session handling.
@@ -675,20 +675,12 @@ Deliverables:
 
 ### Phase 7 — Desktop UI
 
-Only begin after CLI relay is stable.
+Status: **Legacy UI removed on 2026-09-23; redesign pending.**
 
-Likely controls:
-
-- A tab selector;
-- B tab selector;
-- Start;
-- Pause;
-- Resume;
-- Stop;
-- max rounds;
-- status;
-- compact transcript/audit view;
-- tray behavior if desired.
+The original Tkinter desktop console and its launcher/tests were removed after
+the fresh-chat production workflow became the authoritative operating model.
+The next UI should be designed from a blank slate around that proven lifecycle
+rather than preserving the old tab-selection/Initialize-Both interface.
 
 ---
 
@@ -712,7 +704,7 @@ Do not prioritize:
 
 ## 16. Immediate Next Step
 
-Phase 6 is complete and locally verified. Complete the remaining production integration from Phase 1 so the CLI uses one persistent live Chrome debugging connection before the first real end-to-end relay smoke test.
+Phase 1 production live-browser integration is implemented and the local transport milestone passed. The first live relay attempt proved A → B submission but exposed current ChatGPT replacing a transient `Thinking` assistant turn with the final answer under a new turn identity; that assistant-candidate replacement fix passed local verification. The second live attempt then showed ChatGPT transiently changing the rendered user-turn count from 3 to 2 while B was generating. The strict state now exposes the latest explicit user turn, and transaction tracking follows that submitted user turn by identity/text while tolerating non-increasing count/DOM-ID churn for the same normalized message. A genuinely different user message still fails closed. Re-run `scripts/verify-live-browser-production.ps1`, then rerun `scripts/parley-live-relay-v1.ps1`.
 
 ---
 
@@ -724,6 +716,6 @@ If work resumes in a future session, start here:
 2. Treat `main` as the inherited baseline.
 3. Treat `test/upstream-bridge-live` as the preserved empirical baseline showing the original bridge defects.
 4. Do not assume `feature/live-browser-attach` should be merged wholesale; it is an experimental source of proven ideas.
-5. Complete the remaining **Phase 1 production live-browser integration** before running the first real end-to-end relay smoke test. Then proceed to Phase 7.
+5. Production live-browser transport verification has passed. Run the first real end-to-end browser relay using `scripts/parley-live-relay-v1.ps1`. If that succeeds, Phase 1 is complete and the project can proceed to Phase 7.
 6. Before changing architecture, verify whether a newer planning document or merged implementation has replaced this one.
 

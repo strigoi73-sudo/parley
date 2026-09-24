@@ -1,3 +1,4 @@
+import io
 import unittest
 from unittest import mock
 
@@ -14,6 +15,7 @@ class RelayCLITests(unittest.TestCase):
             "4",
             "--include-text",
             "--json",
+            "--prompt-a",
         ])
 
         self.assertEqual(options["tab_a"], "1")
@@ -21,6 +23,153 @@ class RelayCLITests(unittest.TestCase):
         self.assertEqual(options["rounds"], 4)
         self.assertTrue(options["include_text"])
         self.assertTrue(options["json_output"])
+        self.assertTrue(options["prompt_a"])
+        self.assertFalse(options["initialize"])
+        self.assertFalse(options["fresh_chats"])
+
+    def test_parse_relay_args_accepts_fresh_chats(self):
+        options = cli._parse_relay_args([
+            "--fresh-chats",
+            "--initialize",
+            "--rounds=1",
+        ])
+
+        self.assertTrue(options["fresh_chats"])
+        self.assertTrue(options["initialize"])
+
+        self.assertTrue(options["fresh_a"])
+        self.assertTrue(options["fresh_b"])
+
+    def test_parse_relay_args_accepts_independent_fresh_roles(self):
+        options = cli._parse_relay_args([
+            "--fresh-a",
+            "--initialize",
+            "--rounds=2",
+        ])
+
+        self.assertTrue(options["fresh_a"])
+        self.assertFalse(options["fresh_b"])
+        self.assertFalse(options["fresh_chats"])
+        self.assertTrue(options["initialize"])
+
+    def test_cmd_relay_fresh_chats_skips_tab_selection(self):
+        fresh = {
+            "ok": True,
+            "A": {
+                "id": "FRESH-A",
+                "title": "Fresh ChatGPT A",
+                "url": "https://chatgpt.com/",
+            },
+            "B": {
+                "id": "FRESH-B",
+                "title": "Fresh ChatGPT B",
+                "url": "https://chatgpt.com/",
+            },
+        }
+
+        with mock.patch.object(
+            cli,
+            "_chatgpt_tabs",
+        ) as existing_tabs, mock.patch.object(
+            cli.workflows,
+            "create_fresh_chatgpt_pair",
+            return_value=fresh,
+        ) as create_pair, mock.patch.object(
+            cli.workflows,
+            "initialize_parley_pair",
+            return_value={"ok": True, "participants": {}},
+        ) as initialize, mock.patch.object(
+            cli,
+            "RelaySession",
+        ) as session_cls, mock.patch.object(
+            cli,
+            "_run_interactive_relay",
+            return_value=0,
+        ):
+            code = cli.cmd_relay([
+                "--fresh-chats",
+                "--initialize",
+                "--rounds=1",
+            ])
+
+        self.assertEqual(code, 0)
+        existing_tabs.assert_not_called()
+        create_pair.assert_called_once_with(
+            progress=cli._print_fresh_chat_progress,
+        )
+        initialize.assert_called_once()
+        self.assertEqual(
+            initialize.call_args.args,
+            ("FRESH-A", "FRESH-B"),
+        )
+        session_cls.assert_called_once()
+
+    def test_cmd_relay_mixes_fresh_a_with_existing_b(self):
+        tabs = [
+            {
+                "id": "EXISTING-B",
+                "title": "Existing B",
+                "url": "https://chatgpt.com/c/b",
+            },
+        ]
+        fresh = {
+            "ok": True,
+            "participant": "A",
+            "tab": {
+                "id": "FRESH-A",
+                "title": "Fresh ChatGPT A",
+                "url": "https://chatgpt.com/c/fresh-a",
+            },
+        }
+
+        with mock.patch.object(
+            cli,
+            "_chatgpt_tabs",
+            return_value=tabs,
+        ), mock.patch.object(
+            cli.workflows,
+            "create_fresh_chatgpt_participant",
+            return_value=fresh,
+        ) as create_one, mock.patch.object(
+            cli.workflows,
+            "initialize_parley_pair",
+            return_value={"ok": True, "participants": {}},
+        ) as initialize, mock.patch.object(
+            cli,
+            "RelaySession",
+        ) as session_cls, mock.patch.object(
+            cli,
+            "_run_interactive_relay",
+            return_value=0,
+        ):
+            code = cli.cmd_relay([
+                "--fresh-a",
+                "EXISTING-B",
+                "--initialize",
+                "--rounds=1",
+            ])
+
+        self.assertEqual(code, 0)
+        create_one.assert_called_once_with(
+            "A",
+            progress=cli._print_fresh_chat_progress,
+        )
+        initialize.assert_called_once()
+        self.assertEqual(
+            initialize.call_args.args,
+            ("FRESH-A", "EXISTING-B"),
+        )
+        session_cls.assert_called_once()
+
+    def test_cmd_relay_rejects_explicit_a_reference_with_fresh_a(self):
+        code = cli.cmd_relay([
+            "EXISTING-A",
+            "EXISTING-B",
+            "--fresh-a",
+            "--initialize",
+            "--rounds=1",
+        ])
+        self.assertEqual(code, 2)
 
     def test_resolve_tab_by_number_or_id(self):
         tabs = [
@@ -86,6 +235,496 @@ class RelayCLITests(unittest.TestCase):
         )
         session.stop.assert_called_once()
 
+    def test_extend_chat_command_raises_total_round_limit(self):
+        session = mock.Mock()
+        session.status.return_value = {"rounds_requested": 2}
+        session.extend_rounds.return_value = 5
+
+        message = cli._handle_relay_command(
+            "EXTEND CHAT 5",
+            session,
+        )
+
+        session.extend_rounds.assert_called_once_with(5)
+        self.assertEqual(message, "Round limit extended to 5.")
+
+    def test_extend_chat_command_rejects_non_extension(self):
+        session = mock.Mock()
+        session.status.return_value = {"rounds_requested": 4}
+
+        message = cli._handle_relay_command(
+            "EXTEND CHAT 4",
+            session,
+        )
+
+        session.extend_rounds.assert_not_called()
+        self.assertIn("already 4", message)
+
+    def test_select_rounds_reprompts_until_positive_integer(self):
+        answers = iter(["nope", "0", "3"])
+        rounds = cli._select_rounds(input_fn=lambda _: next(answers))
+        self.assertEqual(rounds, 3)
+
+    def test_poll_chat_reset_requests_exact_user_reset(self):
+        session = mock.Mock()
+        session.tab_a = "TAB-A"
+        session.tab_b = "TAB-B"
+
+        with mock.patch.object(
+            cli.workflows,
+            "read_turn_state",
+            side_effect=[
+                {
+                    "ok": True,
+                    "user": {
+                        "text": "ordinary message",
+                    },
+                },
+                {
+                    "ok": True,
+                    "user": {
+                        "text": "RESET CHAT",
+                    },
+                },
+            ],
+        ):
+            label = cli._poll_chat_reset(session)
+
+        self.assertEqual(label, "B")
+        session.request_reset.assert_called_once_with("B")
+
+    def test_interactive_limit_prompt_accepts_yes_and_new_total(self):
+        class FakeSession:
+            def __init__(self):
+                self.alive = True
+                self.exception = None
+                self.limit = 1
+                self.extended_to = None
+                self._result = {
+                    "status": "complete",
+                    "state": "COMPLETE",
+                    "rounds_requested": 3,
+                    "rounds_completed": 1,
+                    "transfers": [],
+                }
+
+            def start(self):
+                return self
+
+            def is_alive(self):
+                return self.alive
+
+            def status(self):
+                return {
+                    "status": "running" if self.alive else "complete",
+                    "state": "TRANSFER_B_TO_A",
+                    "control": "running",
+                    "rounds_completed": 1,
+                    "rounds_requested": self.limit,
+                    "awaiting_extension": self.alive,
+                    "transfers_completed": 0,
+                    "last_transfer": None,
+                }
+
+            def extend_rounds(self, new_total):
+                self.extended_to = new_total
+                self.limit = new_total
+                self.alive = False
+                return new_total
+
+            def finish_at_round_limit(self):
+                self.alive = False
+
+            def join(self):
+                return self._result
+
+        session = FakeSession()
+        output = io.StringIO()
+        with mock.patch("sys.stdout", output):
+            code = cli._run_interactive_relay(
+                session,
+                input_stream=io.StringIO("y\n3\n"),
+                output_json=False,
+                sleep=lambda _: None,
+            )
+
+        self.assertEqual(code, 0)
+        self.assertEqual(session.extended_to, 3)
+        rendered = output.getvalue()
+        self.assertIn(
+            "Round limit reached at 1. "
+            "Extend session? [y/N] (no timeout)",
+            rendered,
+        )
+        self.assertIn(
+            "New total rounds (must be greater than 1):",
+            rendered,
+        )
+        self.assertIn("Round limit extended to 3.", rendered)
+
+    def test_select_initial_prompt_reprompts_until_nonblank(self):
+        answers = iter([
+            "   ",
+            "END PROMPT",
+            "Start the discussion",
+            "END PROMPT",
+        ])
+        prompt = cli._select_initial_prompt(
+            input_fn=lambda _: next(answers)
+        )
+        self.assertEqual(prompt, "Start the discussion")
+
+    def test_select_initial_prompt_preserves_multiline_paragraphs(self):
+        answers = iter([
+            "Pivot from Cthulhu to AGI.",
+            "",
+            "Build on the prior discussion.",
+            "END PROMPT",
+        ])
+        prompt = cli._select_initial_prompt(
+            input_fn=lambda _: next(answers)
+        )
+        self.assertEqual(
+            prompt,
+            (
+                "Pivot from Cthulhu to AGI.\n\n"
+                "Build on the prior discussion."
+            ),
+        )
+
+    def test_select_initial_prompt_flushes_console_on_interrupt(self):
+        def interrupted(_):
+            raise KeyboardInterrupt()
+
+        with mock.patch.object(
+            cli,
+            "_flush_pending_console_input",
+            return_value=True,
+        ) as flush:
+            with self.assertRaises(KeyboardInterrupt):
+                cli._select_initial_prompt(input_fn=interrupted)
+
+        flush.assert_called_once_with()
+
+    def test_cmd_relay_prompt_a_sends_initial_prompt_before_session(self):
+        tabs = [
+            {
+                "id": "TAB-A",
+                "title": "Chat A",
+                "url": "https://chatgpt.com/c/a",
+            },
+            {
+                "id": "TAB-B",
+                "title": "Chat B",
+                "url": "https://chatgpt.com/c/b",
+            },
+        ]
+        answers = iter([
+            "Discuss whether Pluto is a planet.",
+            "END PROMPT",
+        ])
+
+        with mock.patch.object(
+            cli,
+            "_chatgpt_tabs",
+            return_value=tabs,
+        ), mock.patch.object(
+            cli.workflows,
+            "send_and_wait",
+            return_value={
+                "response_text": (
+                    "A REPLY: Starting reply\n\nA REPLY END"
+                ),
+                "response_complete": True,
+            },
+        ) as send_wait, mock.patch.object(
+            cli,
+            "RelaySession",
+        ) as session_cls, mock.patch.object(
+            cli,
+            "_run_interactive_relay",
+            return_value=0,
+        ) as run:
+            session = session_cls.return_value
+            code = cli.cmd_relay(
+                ["1", "2", "--rounds=2", "--prompt-a"],
+                input_fn=lambda _: next(answers),
+            )
+
+        self.assertEqual(code, 0)
+        send_wait.assert_called_once_with(
+            "TAB-A",
+            "Discuss whether Pluto is a planet.",
+            wait_timeout_ms=cli.RELAY_RESPONSE_TIMEOUT_MS,
+            expected_reply_prefix="A REPLY:",
+            expected_reply_suffix="A REPLY END",
+        )
+        session_cls.assert_called_once_with(
+            cli.workflows.bridge,
+            "TAB-A",
+            "TAB-B",
+            2,
+            include_text=False,
+            initial_context="Discuss whether Pluto is a planet.",
+        )
+        run.assert_called_once_with(
+            session,
+            input_stream=None,
+            output_json=False,
+        )
+
+    def test_cmd_relay_initialize_bootstraps_before_session(self):
+        tabs = [
+            {
+                "id": "TAB-A",
+                "title": "Chat A",
+                "url": "https://chatgpt.com/c/a",
+            },
+            {
+                "id": "TAB-B",
+                "title": "Chat B",
+                "url": "https://chatgpt.com/c/b",
+            },
+        ]
+
+        with mock.patch.object(
+            cli,
+            "_chatgpt_tabs",
+            return_value=tabs,
+        ), mock.patch.object(
+            cli.workflows,
+            "initialize_parley_pair",
+            return_value={"ok": True, "participants": {}},
+        ) as initialize, mock.patch.object(
+            cli,
+            "RelaySession",
+        ) as session_cls, mock.patch.object(
+            cli,
+            "_run_interactive_relay",
+            return_value=0,
+        ):
+            code = cli.cmd_relay([
+                "1",
+                "2",
+                "--rounds=1",
+                "--initialize",
+            ])
+
+        self.assertEqual(code, 0)
+        initialize.assert_called_once()
+        self.assertEqual(initialize.call_args.args, ("TAB-A", "TAB-B"))
+        self.assertTrue(callable(initialize.call_args.kwargs["progress"]))
+        session_cls.assert_called_once()
+
+    def test_cmd_relay_startup_reset_propagates_to_b(self):
+        tabs = [
+            {
+                "id": "TAB-A",
+                "title": "Chat A",
+                "url": "https://chatgpt.com/c/a",
+            },
+            {
+                "id": "TAB-B",
+                "title": "Chat B",
+                "url": "https://chatgpt.com/c/b",
+            },
+        ]
+        responses = [
+            {
+                "response_text": "RESET CHAT",
+                "response_complete": True,
+            },
+            {
+                "response_text": "RESET CHAT",
+                "response_complete": True,
+            },
+        ]
+
+        with mock.patch.object(
+            cli,
+            "_chatgpt_tabs",
+            return_value=tabs,
+        ), mock.patch.object(
+            cli.workflows,
+            "send_and_wait",
+            side_effect=responses,
+        ) as send_wait, mock.patch.object(
+            cli,
+            "RelaySession",
+        ) as session_cls:
+            reset_answers = iter([
+                "RESET CHAT",
+                "END PROMPT",
+            ])
+            code = cli.cmd_relay(
+                ["1", "2", "--rounds=2", "--prompt-a"],
+                input_fn=lambda _: next(reset_answers),
+            )
+
+        self.assertEqual(code, 0)
+        self.assertEqual(send_wait.call_count, 2)
+        self.assertEqual(send_wait.call_args_list[1].args, ("TAB-B", "RESET CHAT"))
+        self.assertEqual(
+            send_wait.call_args_list[1].kwargs["wait_timeout_ms"],
+            cli.RELAY_RESPONSE_TIMEOUT_MS,
+        )
+        self.assertEqual(
+            send_wait.call_args_list[1].kwargs["expected_reply_prefix"],
+            "B REPLY:",
+        )
+        self.assertEqual(
+            send_wait.call_args_list[1].kwargs["expected_reply_suffix"],
+            "B REPLY END",
+        )
+        session_cls.assert_not_called()
+
+    def test_cmd_relay_prompt_a_failure_does_not_start_session(self):
+        tabs = [
+            {
+                "id": "TAB-A",
+                "title": "Chat A",
+                "url": "https://chatgpt.com/c/a",
+            },
+            {
+                "id": "TAB-B",
+                "title": "Chat B",
+                "url": "https://chatgpt.com/c/b",
+            },
+        ]
+
+        with mock.patch.object(
+            cli,
+            "_chatgpt_tabs",
+            return_value=tabs,
+        ), mock.patch.object(
+            cli.workflows,
+            "send_and_wait",
+            return_value={
+                "error": "chatgpt_marked_response_timeout",
+                "response_complete": False,
+            },
+        ), mock.patch.object(
+            cli,
+            "RelaySession",
+        ) as session_cls:
+            failure_answers = iter([
+                "Start",
+                "END PROMPT",
+            ])
+            code = cli.cmd_relay(
+                ["1", "2", "--rounds=2", "--prompt-a"],
+                input_fn=lambda _: next(failure_answers),
+            )
+
+        self.assertEqual(code, 1)
+        session_cls.assert_not_called()
+
+    def test_interactive_relay_treats_user_stop_as_clean_exit(self):
+        class FakeSession:
+            exception = None
+
+            def __init__(self):
+                self.alive = True
+                self._result = {
+                    "status": "stopped",
+                    "state": "STOPPED",
+                    "rounds_requested": 5,
+                    "rounds_completed": 1,
+                    "transfers": [],
+                }
+
+            def start(self):
+                return self
+
+            def is_alive(self):
+                return self.alive
+
+            def stop(self):
+                self.alive = False
+
+            def join(self):
+                return self._result
+
+            def status(self):
+                return {
+                    "status": "running" if self.alive else "stopped",
+                    "state": "TRANSFER_B_TO_A" if self.alive else "STOPPED",
+                    "control": "running",
+                    "rounds_completed": 1,
+                    "rounds_requested": 5,
+                    "awaiting_extension": False,
+                    "transfers_completed": 0,
+                    "last_transfer": None,
+                }
+
+        output = io.StringIO()
+        with mock.patch("sys.stdout", output):
+            code = cli._run_interactive_relay(
+                FakeSession(),
+                input_stream=io.StringIO("q\n"),
+                output_json=False,
+                sleep=lambda _: None,
+            )
+
+        rendered = output.getvalue()
+        self.assertEqual(code, 0)
+        self.assertIn("Stop requested.", rendered)
+        self.assertIn("Relay stopped by user.", rendered)
+        self.assertNotIn('"status": "stopped"', rendered)
+
+    def test_interactive_relay_treats_coordinated_reset_as_success(self):
+        class FakeSession:
+            exception = None
+
+            def __init__(self):
+                self.alive = True
+                self._result = {
+                    "status": "stopped",
+                    "state": "STOPPED",
+                    "rounds_requested": 2,
+                    "rounds_completed": 1,
+                    "transfers": [],
+                    "reset_requested": True,
+                    "reset_by": "B",
+                    "reset_propagated": True,
+                    "reset_acknowledged_by": "A",
+                    "restart_point": "A",
+                }
+
+            def start(self):
+                self.alive = False
+                return self
+
+            def is_alive(self):
+                return self.alive
+
+            def join(self):
+                return self._result
+
+            def status(self):
+                return {
+                    "status": "stopped",
+                    "state": "STOPPED",
+                    "control": "running",
+                    "rounds_completed": 1,
+                    "rounds_requested": 2,
+                    "awaiting_extension": False,
+                    "transfers_completed": 0,
+                    "last_transfer": None,
+                }
+
+        output = io.StringIO()
+        with mock.patch("sys.stdout", output):
+            code = cli._run_interactive_relay(
+                FakeSession(),
+                input_stream=io.StringIO(""),
+                output_json=False,
+                sleep=lambda _: None,
+            )
+
+        self.assertEqual(code, 0)
+        self.assertIn("Reset coordinated: B -> A", output.getvalue())
+
     def test_cmd_relay_accepts_numbered_selection(self):
         tabs = [
             {
@@ -126,11 +765,60 @@ class RelayCLITests(unittest.TestCase):
             "TAB-B",
             2,
             include_text=False,
+            initial_context=None,
         )
         run.assert_called_once_with(
             session,
             input_stream=None,
             output_json=False,
+        )
+
+    def test_cmd_relay_prompts_for_rounds_when_option_omitted(self):
+        tabs = [
+            {
+                "id": "TAB-A",
+                "title": "Chat A",
+                "url": "https://chatgpt.com/c/a",
+            },
+            {
+                "id": "TAB-B",
+                "title": "Chat B",
+                "url": "https://chatgpt.com/c/b",
+            },
+        ]
+        prompts = []
+        answers = iter(["4"])
+
+        def input_fn(prompt):
+            prompts.append(prompt)
+            return next(answers)
+
+        with mock.patch.object(
+            cli,
+            "_chatgpt_tabs",
+            return_value=tabs,
+        ), mock.patch.object(
+            cli,
+            "RelaySession",
+        ) as session_cls, mock.patch.object(
+            cli,
+            "_run_interactive_relay",
+            return_value=0,
+        ):
+            code = cli.cmd_relay(
+                ["1", "2"],
+                input_fn=input_fn,
+            )
+
+        self.assertEqual(code, 0)
+        self.assertIn("Number of rounds: ", prompts)
+        session_cls.assert_called_once_with(
+            cli.workflows.bridge,
+            "TAB-A",
+            "TAB-B",
+            4,
+            include_text=False,
+            initial_context=None,
         )
 
     def test_cmd_relay_rejects_same_tab(self):
@@ -166,6 +854,7 @@ class RelaySessionTests(unittest.TestCase):
             control,
             include_text,
             event_sink,
+            initial_context,
         ):
             event_sink({
                 "event": "state_changed",
@@ -235,6 +924,55 @@ class RelaySessionTests(unittest.TestCase):
         self.assertEqual(status["rounds_completed"], 1)
         self.assertEqual(status["transfers_completed"], 2)
 
+    def test_session_exposes_defensive_event_and_transfer_snapshots(self):
+        session = RelaySession(
+            mock.Mock(),
+            "A",
+            "B",
+            2,
+        )
+        session._on_event({
+            "event": "state_changed",
+            "state": "TRANSFER_A_TO_B",
+        })
+        session._on_event({
+            "event": "transfer_completed",
+            "round": 1,
+            "direction": "A->B",
+            "response_text": "B REPLY: hello\n\nB REPLY END",
+        })
+
+        events = session.events()
+        transfers = session.transfers()
+
+        self.assertEqual(events[0]["event"], "state_changed")
+        self.assertEqual(transfers[0]["direction"], "A->B")
+
+        events[0]["event"] = "mutated"
+        transfers[0]["direction"] = "mutated"
+
+        self.assertEqual(
+            session.events()[0]["event"],
+            "state_changed",
+        )
+        self.assertEqual(
+            session.transfers()[0]["direction"],
+            "A->B",
+        )
+
+    def test_session_extend_rounds_updates_status(self):
+        session = RelaySession(
+            mock.Mock(),
+            "A",
+            "B",
+            2,
+        )
+
+        updated = session.extend_rounds(5)
+
+        self.assertEqual(updated, 5)
+        self.assertEqual(session.status()["rounds_requested"], 5)
+
     def test_session_control_methods_delegate(self):
         session = RelaySession(
             mock.Mock(),
@@ -255,10 +993,12 @@ class RelaySessionTests(unittest.TestCase):
             session.pause()
             session.resume()
             session.stop()
+            session.request_reset("B")
 
         pause.assert_called_once()
         resume.assert_called_once()
         stop.assert_called_once()
+        self.assertEqual(session.control._reset_request, "B")
 
 
 if __name__ == "__main__":
