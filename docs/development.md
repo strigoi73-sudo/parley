@@ -53,9 +53,10 @@ Always run commands through the repository virtual environment so tests do not a
 ### Windows
 
 ```powershell
-.\.venv\Scripts\python.exe -m compileall -q .\parley .\parley.py .\parley_mcp.py .\tests
-.\.venv\Scripts\python.exe -m unittest discover -s .\tests -v
+.\scripts\verify.ps1
 ```
+
+`scripts/verify.ps1` is the canonical Windows verification entry point. It uses the repository virtual environment directly, compiles the Python sources, and runs the full `unittest` suite.
 
 ### macOS/Linux
 
