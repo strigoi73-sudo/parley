@@ -6,6 +6,7 @@ Parley does not run an LLM of its own. It attaches to Chrome, identifies the two
 
 This repository is a fork of [Satyajeet-04/parley](https://github.com/Satyajeet-04/parley). The fork retains the inherited generic CDP utilities and multi-site adapters, but the actively developed product path is the two-ChatGPT relay described here.
 
+[![CI](https://github.com/strigoi73-sudo/parley/actions/workflows/ci.yml/badge.svg)](https://github.com/strigoi73-sudo/parley/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 ## Current capabilities
@@ -217,7 +218,7 @@ Windows:
 .\.venv\Scripts\python.exe -m unittest discover -s .\tests -v
 ```
 
-Live Chrome behavior is verified separately because it operates against a real signed-in browser session.
+GitHub Actions runs the install/build/compile/test matrix across Python 3.11–3.14 for pull requests and pushes to `main`. Live Chrome behavior is verified separately because it operates against a real signed-in browser session.
 
 See [docs/development.md](docs/development.md) for the complete development and verification workflow.
 
