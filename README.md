@@ -137,7 +137,7 @@ Mixed participant modes:
 The Windows production launcher wraps the same initialized workflow:
 
 ```powershell
-.\scripts\parley-live-relay-v1.ps1 -Rounds 3
+.\scripts\parley-live-relay.ps1 -Rounds 3
 ```
 
 During an interactive relay:
@@ -214,9 +214,10 @@ The repository contains a `unittest` regression suite under `tests/`.
 Windows:
 
 ```powershell
-.\.venv\Scripts\python.exe -m compileall -q .\parley .\parley.py .\parley_mcp.py .\tests
-.\.venv\Scripts\python.exe -m unittest discover -s .\tests -v
+.\scripts\verify.ps1
 ```
+
+The verification script uses the repository `.venv`, compiles the Python sources, and runs the full `unittest` suite.
 
 Live Chrome behavior is verified separately because it operates against a real signed-in browser session.
 
