@@ -1,0 +1,49 @@
+name: Feature request
+description: Propose a focused Parley improvement
+title: "[Feature]: "
+labels: []
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem or use case
+      description: What concrete problem should Parley solve?
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed behavior
+      description: Describe the desired behavior without assuming a particular implementation.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Two-ChatGPT relay
+        - Live Chrome transport
+        - Participant setup / protocol bootstrap
+        - Desktop app
+        - CLI
+        - Generic browser automation
+        - Packaging / developer experience
+        - Documentation
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: constraints
+    attributes:
+      label: Constraints or compatibility concerns
+      description: Note anything that must remain compatible or fail closed.
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Optional.
