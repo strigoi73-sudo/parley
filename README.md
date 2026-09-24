@@ -24,7 +24,7 @@ The current `main` branch includes:
 - verified send-and-wait behavior that tracks the newly submitted user turn and corresponding assistant response;
 - deterministic A → B → A relay sequencing;
 - duplicate prevention, pause/resume/stop controls, audit events, and fail-closed error handling;
-- a CLI for relay control and lower-level browser automation;
+- a small CLI for launching the desktop app, listing eligible ChatGPT tabs, and lower-level browser/debug automation;
 - inherited MCP, opencode, generic CDP, and non-ChatGPT adapter functionality.
 
 The primary architecture and developer workflow are documented in:
@@ -109,47 +109,19 @@ or directly:
 
 Choose each participant independently as a fresh conversation or an eligible existing ChatGPT tab, enter the initial prompt and round count, then start the relay.
 
-## CLI relay workflow
+## CLI utilities
 
-List eligible ChatGPT tabs:
+The desktop app is the only supported end-user relay interface.
+
+The CLI remains available for launching the app, listing eligible ChatGPT tabs, and lower-level development/debug operations:
 
 ```powershell
+.\.venv\Scripts\python.exe .\parley.py app
 .\.venv\Scripts\python.exe .\parley.py chats
+.\.venv\Scripts\python.exe .\parley.py list
 ```
 
-Run an initialized relay using two existing tabs:
-
-```powershell
-.\.venv\Scripts\python.exe .\parley.py relay --initialize --rounds 3
-```
-
-Mixed participant modes:
-
-```powershell
-# Fresh A, existing B
-.\.venv\Scripts\python.exe .\parley.py relay --fresh-a --initialize --rounds 3
-
-# Existing A, fresh B
-.\.venv\Scripts\python.exe .\parley.py relay --fresh-b --initialize --rounds 3
-
-# Both fresh
-.\.venv\Scripts\python.exe .\parley.py relay --fresh-chats --initialize --rounds 3
-```
-
-The Windows production launcher wraps the same initialized workflow:
-
-```powershell
-.\scripts\parley-live-relay.ps1 -Rounds 3
-```
-
-During an interactive relay:
-
-- `p` pauses at the next safe checkpoint;
-- `r` resumes;
-- `s` shows status;
-- `q` requests a clean stop.
-
-By default, relay summaries do not retain full transferred message text. Use `--include-text` only when that is intentional.
+The former interactive `parley relay` command and `scripts/parley-live-relay.ps1` launcher are retired. The low-level `bridge` command remains available for development/debug use; it is not the supported production relay UI.
 
 ## Architecture
 
@@ -158,7 +130,7 @@ The current runtime is organized around explicit responsibility boundaries:
 ```text
 parley/
 ├── app.py                 desktop presentation
-├── cli.py                 command-line interface
+├── cli.py                 desktop launcher and developer utilities
 ├── core.py                generic CDP operations and transport dispatch
 ├── live_browser.py        persistent live-Chrome transport
 ├── participants.py        shared ChatGPT target eligibility
