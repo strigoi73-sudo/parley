@@ -6,7 +6,7 @@ Layers:
     workflows  - AI workflows built on top (send, wait, bridge, poll)
 """
 
-__version__ = "1.1.0"
+from parley_version import __version__
 
 from . import core
 from . import workflows

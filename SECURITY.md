@@ -2,9 +2,9 @@
 
 ## Supported versions
 
-Until Parley establishes a formal release/tag policy, security fixes are made against the current `main` branch.
+Security fixes are made against the current `main` branch and, when practical, the latest formal release.
 
-Older commits, historical branches, and superseded development snapshots should not be assumed to receive security fixes.
+Older releases, historical branches, and superseded development snapshots should not be assumed to receive security fixes unless explicitly stated otherwise.
 
 ## Reporting a vulnerability
 

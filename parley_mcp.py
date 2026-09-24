@@ -24,11 +24,13 @@ import os
 import subprocess
 import sys
 
+from parley_version import __version__
+
 HERE = os.path.dirname(os.path.abspath(__file__))
 PARLEY = os.path.join(HERE, "parley.py")
 
 PROTOCOL_VERSION = "2024-11-05"
-SERVER_INFO = {"name": "parley", "version": "1.1.0"}
+SERVER_INFO = {"name": "parley", "version": __version__}
 
 # Tool name -> (parley subcommand, [ordered arg names], {defaults}, timeout_s)
 TOOLS = [

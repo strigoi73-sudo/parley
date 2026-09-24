@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "parley"
-version = "1.1.0"
+dynamic = ["version"]
 description = "Local CDP browser automation with a deterministic two-ChatGPT relay workflow."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -34,9 +34,14 @@ Upstream = "https://github.com/Satyajeet-04/parley"
 [project.scripts]
 parley = "parley.cli:main"
 
+[tool.setuptools]
+py-modules = ["parley_version"]
+
 [tool.setuptools.packages.find]
 include = ["parley", "parley.*"]
 
 [tool.setuptools.package-data]
 parley = ["protocols/*.md"]
 
+[tool.setuptools.dynamic]
+version = { attr = "parley_version.__version__" }

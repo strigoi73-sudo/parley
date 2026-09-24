@@ -31,6 +31,8 @@ The primary architecture and developer workflow are documented in:
 
 - [Architecture](docs/architecture.md)
 - [Development](docs/development.md)
+- [Release policy](docs/releases.md)
+- [Changelog](CHANGELOG.md)
 - [Contributing](CONTRIBUTING.md)
 
 The original relay implementation plan is retained only as a historical record under [docs/history](docs/history/CHATGPT-RELAY-PLAN.md).
