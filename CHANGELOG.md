@@ -14,7 +14,8 @@ The project uses Semantic Versioning for formal releases. The Git history remain
 - unified startup RESET CHAT propagation across workflow, CLI, and desktop handling, with reset outcomes represented as clean coordinated stops rather than startup failures;
 - retired the interactive `parley relay` CLI and its PowerShell launcher so the desktop app is the single supported production relay interface; retained CLI launcher/listing/debug utilities and the low-level `bridge` command;
 - extracted the A/B protocol provisioning, acknowledgement barrier, and activation sequence into a dedicated bootstrap orchestration module while preserving the existing workflow API;
-- extracted the strict ChatGPT send/wait state machine into a dedicated transaction module with explicit workflow-provided dependencies, while preserving the existing workflow API and fail-closed semantics.
+- extracted the strict ChatGPT send/wait state machine into a dedicated transaction module with explicit workflow-provided dependencies, while preserving the existing workflow API and fail-closed semantics;
+- extracted desktop startup/thread/session/control/polling lifecycle into a non-Tkinter controller so the Tkinter application owns presentation rather than relay runtime state.
 
 ## [1.1.0] - 2026-09-24
 
