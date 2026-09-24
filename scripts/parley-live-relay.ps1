@@ -21,7 +21,7 @@ if (-not (Test-Path $Python)) {
     throw "Parley virtual environment not found at $Python"
 }
 
-Write-Host "`n=== PARLEY LIVE RELAY v1 ===" -ForegroundColor Cyan
+Write-Host "`n=== PARLEY LIVE RELAY ===" -ForegroundColor Cyan
 Write-Host "Prerequisites:" -ForegroundColor Yellow
 Write-Host "  1. In normal Chrome, enable remote debugging at chrome://inspect/#remote-debugging"
 if ($FreshChats -or ($FreshA -and $FreshB)) {
@@ -81,7 +81,7 @@ if ($Json) {
 
 & $Python @ParleyArgs
 if ($LASTEXITCODE -ne 0) {
-    throw "Parley live relay v1 failed."
+    throw "Parley live relay failed."
 }
 
-Write-Host "`nParley live relay v1 ended cleanly." -ForegroundColor Green
+Write-Host "`nParley live relay ended cleanly." -ForegroundColor Green

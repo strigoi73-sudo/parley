@@ -88,8 +88,7 @@ For ordinary changes, run the complete local regression suite before opening a P
 Windows:
 
 ```powershell
-.\.venv\Scripts\python.exe -m compileall -q .\parley .\parley.py .\parley_mcp.py .\tests
-.\.venv\Scripts\python.exe -m unittest discover -s .\tests -v
+.\scripts\verify.ps1
 ```
 
 macOS/Linux:
