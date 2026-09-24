@@ -926,143 +926,8 @@ def _initiate_fresh_chatgpt_tab(
     }
 
 
-def create_fresh_chatgpt_pair(
-    ready_timeout_ms=_FRESH_CHAT_READY_TIMEOUT_MS,
-    progress=None,
-):
-    """Create, seed, and stabilize two clean ChatGPT conversations."""
-    created = {}
-
-    for label in ("A", "B"):
-        result = core.create_tab(_FRESH_CHATGPT_URL)
-        if not isinstance(result, dict) or not result.get("ok"):
-            return {
-                "ok": False,
-                "error": (
-                    result.get("error")
-                    if isinstance(result, dict)
-                    else "fresh_chat_create_failed"
-                ) or "fresh_chat_create_failed",
-                "stage": "create_fresh_chat",
-                "participant": label,
-                "detail": result,
-                "created": created,
-            }
-
-        created[label] = {
-            "id": result["id"],
-            "title": f"Fresh ChatGPT {label}",
-            "url": result.get("url") or _FRESH_CHATGPT_URL,
-        }
-
-    for label in ("A", "B"):
-        tab = created[label]
-        focus = core.set_focus_emulation(
-            tab["id"],
-            True,
-            timeout=None,
-        )
-        if not focus.get("ok"):
-            return {
-                "ok": False,
-                "error": "fresh_chat_focus_emulation_failed",
-                "stage": "focus_emulation",
-                "participant": label,
-                "detail": focus,
-                "created": created,
-            }
-        if callable(progress):
-            progress({
-                "label": label,
-                "stage": "focus_emulation",
-                "status": "complete",
-            })
-
-        ready = core.wait_for(
-            tab["id"],
-            "#prompt-textarea",
-            timeout_ms=ready_timeout_ms,
-        )
-        if not isinstance(ready, dict) or not ready.get("found"):
-            return {
-                "ok": False,
-                "error": (
-                    ready.get("error")
-                    if isinstance(ready, dict)
-                    else "fresh_chat_composer_timeout"
-                ) or "fresh_chat_composer_timeout",
-                "stage": "wait_fresh_chat",
-                "participant": label,
-                "detail": ready,
-                "created": created,
-            }
-
-        current_url = core.tab_url(tab["id"])
-        if current_url:
-            tab["url"] = current_url
-
-    for label in ("A", "B"):
-        tab = created[label]
-        if callable(progress):
-            progress({
-                "label": label,
-                "stage": "initial_prompt",
-                "status": "starting",
-                "prompt": _FRESH_CHAT_INITIAL_PROMPT,
-            })
-
-        initiated = _initiate_fresh_chatgpt_tab(tab["id"])
-        tab["initialization"] = initiated
-        if not initiated.get("ok"):
-            return {
-                "ok": False,
-                "error": initiated.get(
-                    "error",
-                    "fresh_chat_initialization_failed",
-                ),
-                "stage": initiated.get(
-                    "stage",
-                    "verify_initial_prompt",
-                ),
-                "participant": label,
-                "detail": initiated,
-                "created": created,
-            }
-
-        tab["url"] = initiated.get("url") or tab["url"]
-        if callable(progress):
-            progress({
-                "label": label,
-                "stage": "initial_prompt",
-                "status": "complete",
-                "url": tab["url"],
-                "page_activity": initiated.get("page_activity"),
-            })
-
-    return {
-        "ok": True,
-        "A": created["A"],
-        "B": created["B"],
-        "created": created,
-    }
-
-
-
-def create_fresh_chatgpt_participant(
-    label,
-    ready_timeout_ms=_FRESH_CHAT_READY_TIMEOUT_MS,
-    progress=None,
-):
-    """Create, seed, and stabilize one clean ChatGPT participant."""
-    label = str(label or "").strip().upper()
-    if label not in ("A", "B"):
-        return {
-            "ok": False,
-            "error": "invalid_participant_label",
-            "stage": "create_fresh_chat",
-            "participant": label or None,
-        }
-
+def _create_fresh_chatgpt_tab(label):
+    """Create one blank ChatGPT tab and return normalized tab metadata."""
     result = core.create_tab(_FRESH_CHATGPT_URL)
     if not isinstance(result, dict) or not result.get("ok"):
         return {
@@ -1077,13 +942,24 @@ def create_fresh_chatgpt_participant(
             "detail": result,
         }
 
-    tab = {
-        "id": result["id"],
-        "title": f"Fresh ChatGPT {label}",
-        "url": result.get("url") or _FRESH_CHATGPT_URL,
-        "source": "fresh",
+    return {
+        "ok": True,
+        "tab": {
+            "id": result["id"],
+            "title": f"Fresh ChatGPT {label}",
+            "url": result.get("url") or _FRESH_CHATGPT_URL,
+        },
     }
 
+
+def _ready_fresh_chatgpt_tab(
+    label,
+    tab,
+    *,
+    ready_timeout_ms,
+    progress=None,
+):
+    """Focus one fresh tab, wait for its composer, and refresh its URL."""
     focus = core.set_focus_emulation(
         tab["id"],
         True,
@@ -1096,8 +972,8 @@ def create_fresh_chatgpt_participant(
             "stage": "focus_emulation",
             "participant": label,
             "detail": focus,
-            "tab": tab,
         }
+
     if callable(progress):
         progress({
             "label": label,
@@ -1121,13 +997,20 @@ def create_fresh_chatgpt_participant(
             "stage": "wait_fresh_chat",
             "participant": label,
             "detail": ready,
-            "tab": tab,
         }
 
     current_url = core.tab_url(tab["id"])
     if current_url:
         tab["url"] = current_url
 
+    return {
+        "ok": True,
+        "tab": tab,
+    }
+
+
+def _seed_fresh_chatgpt_tab(label, tab, *, progress=None):
+    """Seed one ready ChatGPT tab and wait for a stable conversation URL."""
     if callable(progress):
         progress({
             "label": label,
@@ -1151,7 +1034,6 @@ def create_fresh_chatgpt_participant(
             ),
             "participant": label,
             "detail": initiated,
-            "tab": tab,
         }
 
     tab["url"] = initiated.get("url") or tab["url"]
@@ -1163,6 +1045,140 @@ def create_fresh_chatgpt_participant(
             "url": tab["url"],
             "page_activity": initiated.get("page_activity"),
         })
+
+    return {
+        "ok": True,
+        "tab": tab,
+    }
+
+
+def create_fresh_chatgpt_pair(
+    ready_timeout_ms=_FRESH_CHAT_READY_TIMEOUT_MS,
+    progress=None,
+):
+    """Create, seed, and stabilize two clean ChatGPT conversations."""
+    created = {}
+
+    # Preserve the established pair startup barrier:
+    # create both tabs -> ready both composers -> seed both conversations.
+    for label in ("A", "B"):
+        step = _create_fresh_chatgpt_tab(label)
+        if not step.get("ok"):
+            return {
+                "ok": False,
+                "error": step.get("error", "fresh_chat_create_failed"),
+                "stage": step.get("stage", "create_fresh_chat"),
+                "participant": label,
+                "detail": step.get("detail"),
+                "created": created,
+            }
+        created[label] = step["tab"]
+
+    for label in ("A", "B"):
+        step = _ready_fresh_chatgpt_tab(
+            label,
+            created[label],
+            ready_timeout_ms=ready_timeout_ms,
+            progress=progress,
+        )
+        if not step.get("ok"):
+            return {
+                "ok": False,
+                "error": step.get("error", "fresh_chat_composer_timeout"),
+                "stage": step.get("stage", "wait_fresh_chat"),
+                "participant": label,
+                "detail": step.get("detail"),
+                "created": created,
+            }
+
+    for label in ("A", "B"):
+        step = _seed_fresh_chatgpt_tab(
+            label,
+            created[label],
+            progress=progress,
+        )
+        if not step.get("ok"):
+            return {
+                "ok": False,
+                "error": step.get(
+                    "error",
+                    "fresh_chat_initialization_failed",
+                ),
+                "stage": step.get("stage", "verify_initial_prompt"),
+                "participant": label,
+                "detail": step.get("detail"),
+                "created": created,
+            }
+
+    return {
+        "ok": True,
+        "A": created["A"],
+        "B": created["B"],
+        "created": created,
+    }
+
+
+def create_fresh_chatgpt_participant(
+    label,
+    ready_timeout_ms=_FRESH_CHAT_READY_TIMEOUT_MS,
+    progress=None,
+):
+    """Create, seed, and stabilize one clean ChatGPT participant."""
+    label = str(label or "").strip().upper()
+    if label not in ("A", "B"):
+        return {
+            "ok": False,
+            "error": "invalid_participant_label",
+            "stage": "create_fresh_chat",
+            "participant": label or None,
+        }
+
+    step = _create_fresh_chatgpt_tab(label)
+    if not step.get("ok"):
+        return {
+            "ok": False,
+            "error": step.get("error", "fresh_chat_create_failed"),
+            "stage": step.get("stage", "create_fresh_chat"),
+            "participant": label,
+            "detail": step.get("detail"),
+        }
+
+    tab = step["tab"]
+    tab["source"] = "fresh"
+
+    step = _ready_fresh_chatgpt_tab(
+        label,
+        tab,
+        ready_timeout_ms=ready_timeout_ms,
+        progress=progress,
+    )
+    if not step.get("ok"):
+        return {
+            "ok": False,
+            "error": step.get("error", "fresh_chat_composer_timeout"),
+            "stage": step.get("stage", "wait_fresh_chat"),
+            "participant": label,
+            "detail": step.get("detail"),
+            "tab": tab,
+        }
+
+    step = _seed_fresh_chatgpt_tab(
+        label,
+        tab,
+        progress=progress,
+    )
+    if not step.get("ok"):
+        return {
+            "ok": False,
+            "error": step.get(
+                "error",
+                "fresh_chat_initialization_failed",
+            ),
+            "stage": step.get("stage", "verify_initial_prompt"),
+            "participant": label,
+            "detail": step.get("detail"),
+            "tab": tab,
+        }
 
     return {
         "ok": True,
