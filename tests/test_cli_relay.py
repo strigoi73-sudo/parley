@@ -529,17 +529,6 @@ class RelayCLITests(unittest.TestCase):
                 "url": "https://chatgpt.com/c/b",
             },
         ]
-        responses = [
-            {
-                "response_text": "RESET CHAT",
-                "response_complete": True,
-            },
-            {
-                "response_text": "RESET CHAT",
-                "response_complete": True,
-            },
-        ]
-
         with mock.patch.object(
             cli,
             "_chatgpt_tabs",
@@ -547,8 +536,24 @@ class RelayCLITests(unittest.TestCase):
         ), mock.patch.object(
             cli.workflows,
             "send_and_wait",
-            side_effect=responses,
+            return_value={
+                "response_text": "RESET CHAT",
+                "response_complete": True,
+            },
         ) as send_wait, mock.patch.object(
+            cli.workflows,
+            "coordinate_parley_reset",
+            return_value={
+                "ok": True,
+                "status": "stopped",
+                "stage": "reset",
+                "reset_requested": True,
+                "reset_by": "A",
+                "reset_propagated": True,
+                "reset_acknowledged_by": "B",
+                "restart_point": "A",
+            },
+        ) as coordinate, mock.patch.object(
             cli,
             "RelaySession",
         ) as session_cls:
@@ -562,19 +567,11 @@ class RelayCLITests(unittest.TestCase):
             )
 
         self.assertEqual(code, 0)
-        self.assertEqual(send_wait.call_count, 2)
-        self.assertEqual(send_wait.call_args_list[1].args, ("TAB-B", "RESET CHAT"))
-        self.assertEqual(
-            send_wait.call_args_list[1].kwargs["wait_timeout_ms"],
-            cli.RELAY_RESPONSE_TIMEOUT_MS,
-        )
-        self.assertEqual(
-            send_wait.call_args_list[1].kwargs["expected_reply_prefix"],
-            "B REPLY:",
-        )
-        self.assertEqual(
-            send_wait.call_args_list[1].kwargs["expected_reply_suffix"],
-            "B REPLY END",
+        send_wait.assert_called_once()
+        coordinate.assert_called_once_with(
+            "A",
+            "TAB-A",
+            "TAB-B",
         )
         session_cls.assert_not_called()
 
