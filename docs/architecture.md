@@ -13,7 +13,7 @@ The repository also retains inherited generic CDP commands, site adapters, MCP i
 ## Layer overview
 
 ```text
-Desktop UI / CLI
+    Desktop UI
         |
         v
     workflows.py
@@ -121,7 +121,7 @@ Owns:
 
 ### `session.py`
 
-Owns the running relay session/worker lifecycle exposed to the CLI and desktop app.
+Owns the running relay session/worker lifecycle used by the desktop app.
 
 ### `control.py`
 
@@ -157,14 +157,19 @@ It handles:
 
 It should not duplicate workflow or relay-engine logic.
 
-## `parley/cli.py` — command-line presentation
+## `parley/cli.py` — launcher and developer utilities
 
-The CLI exposes both:
+The CLI is not a second production relay controller.
 
-- human-facing production commands such as `chats`, `app`, and `relay`; and
-- inherited lower-level browser automation commands.
+It exposes:
 
-The production human-facing commands use live mode by default unless explicitly overridden.
+- `app` to launch the supported desktop relay interface;
+- `chats` to list eligible ChatGPT targets; and
+- inherited lower-level browser/debug commands, including `bridge`, for development and diagnostics.
+
+The former interactive `relay` command is retired. Production relay participant selection, startup, transcript/status presentation, and runtime controls belong to the desktop application.
+
+The human-facing `app` and `chats` commands use live mode by default unless explicitly overridden.
 
 ## Participant preparation
 

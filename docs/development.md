@@ -104,8 +104,8 @@ Before changing behavior, identify which layer owns it.
 - ChatGPT strict extraction → `adapters/chatgpt_strict.py`
 - Higher-level browser/chat operation → `workflows.py`
 - A/B sequencing, dedupe, control, or audit → `relay/`
-- CLI presentation → `cli.py`
-- Desktop presentation → `app.py`
+- Desktop relay presentation/controller → `app.py`
+- CLI launcher and developer utilities → `cli.py`
 
 See [architecture.md](architecture.md) before moving responsibilities across layers.
 
