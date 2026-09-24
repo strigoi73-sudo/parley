@@ -88,28 +88,7 @@ class DesktopController:
                     should_stop=self.operation_stop.is_set,
                     progress=progress,
                 )
-                if (
-                    isinstance(result, dict)
-                    and result.get("ok")
-                    and not result.get("reset_requested")
-                ):
-                    tab_a = result["A"]
-                    tab_b = result["B"]
-                    self.tabs = {"A": tab_a, "B": tab_b}
-                    self.session = self.operations.session_factory(
-                        self.operations.bridge,
-                        tab_a["id"],
-                        tab_b["id"],
-                        rounds,
-                        include_text=True,
-                        initial_context=prompt,
-                    )
-                    self.session.start()
-                elif (
-                    isinstance(result, dict)
-                    and result.get("ok")
-                    and result.get("reset_requested")
-                ):
+                if isinstance(result, dict) and result.get("ok"):
                     self.tabs = {
                         "A": result["A"],
                         "B": result["B"],
@@ -130,6 +109,36 @@ class DesktopController:
         )
         self.startup_thread.start()
         return self.startup_thread
+
+    def create_relay_session(self, result, prompt, rounds):
+        if (
+            not isinstance(result, dict)
+            or not result.get("ok")
+            or result.get("reset_requested")
+        ):
+            raise ValueError("successful non-reset startup result required")
+
+        tab_a = result["A"]
+        tab_b = result["B"]
+        self.tabs = {"A": tab_a, "B": tab_b}
+        self._seen_transfers = 0
+        self._seen_events = 0
+        self._session_done_seen = False
+        self.session = self.operations.session_factory(
+            self.operations.bridge,
+            tab_a["id"],
+            tab_b["id"],
+            rounds,
+            include_text=True,
+            initial_context=prompt,
+        )
+        return self.session
+
+    def start_relay_session(self):
+        if self.session is None:
+            raise RuntimeError("relay session has not been created")
+        self.session.start()
+        return self.session
 
     def pause(self):
         if not self.session_alive:
