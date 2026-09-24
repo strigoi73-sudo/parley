@@ -575,6 +575,59 @@ class RelayCLITests(unittest.TestCase):
         )
         session_cls.assert_not_called()
 
+    def test_cmd_relay_startup_reset_failure_does_not_start_session(self):
+        tabs = [
+            {
+                "id": "TAB-A",
+                "title": "Chat A",
+                "url": "https://chatgpt.com/c/a",
+            },
+            {
+                "id": "TAB-B",
+                "title": "Chat B",
+                "url": "https://chatgpt.com/c/b",
+            },
+        ]
+
+        with mock.patch.object(
+            cli,
+            "_chatgpt_tabs",
+            return_value=tabs,
+        ), mock.patch.object(
+            cli.workflows,
+            "send_and_wait",
+            return_value={
+                "response_text": "RESET CHAT",
+                "response_complete": True,
+            },
+        ), mock.patch.object(
+            cli.workflows,
+            "coordinate_parley_reset",
+            return_value={
+                "ok": False,
+                "error": "parley_reset_propagation_failed",
+                "stage": "reset_propagation",
+                "reset_requested": True,
+                "reset_by": "A",
+                "reset_propagated": False,
+                "restart_point": "A",
+            },
+        ), mock.patch.object(
+            cli,
+            "RelaySession",
+        ) as session_cls:
+            reset_answers = iter([
+                "RESET CHAT",
+                "END PROMPT",
+            ])
+            code = cli.cmd_relay(
+                ["1", "2", "--rounds=2", "--prompt-a"],
+                input_fn=lambda _: next(reset_answers),
+            )
+
+        self.assertEqual(code, 1)
+        session_cls.assert_not_called()
+
     def test_cmd_relay_prompt_a_failure_does_not_start_session(self):
         tabs = [
             {
