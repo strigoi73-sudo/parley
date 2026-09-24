@@ -98,6 +98,7 @@ Current responsibilities include:
 - fresh ChatGPT participant creation through shared create/ready/seed lifecycle phases;
 - existing/fresh participant resolution;
 - shared resolved-participant session preparation (protocol bootstrap and initial A transaction);
+- coordinated startup reset propagation using the same reset metadata vocabulary as the relay engine;
 - protocol-file upload and activation;
 - barriered A/B initialization;
 - lower-level inherited bridge and site workflows.
