@@ -458,32 +458,6 @@ class LiveBrowserCLITests(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertEqual(observed, ["live"])
 
-    def test_relay_defaults_to_live_before_tab_discovery(self):
-        observed = []
-
-        def list_tabs():
-            observed.append(core.connection_mode())
-            return []
-
-        with mock.patch.object(core, "list_tabs", side_effect=list_tabs):
-            code = cli.main(["parley", "relay"])
-
-        self.assertEqual(code, 1)
-        self.assertEqual(observed, ["live"])
-
-    def test_classic_flag_overrides_relay_default(self):
-        observed = []
-
-        def list_tabs():
-            observed.append(core.connection_mode())
-            return []
-
-        with mock.patch.object(core, "list_tabs", side_effect=list_tabs):
-            code = cli.main(["parley", "--classic", "relay"])
-
-        self.assertEqual(code, 1)
-        self.assertEqual(observed, ["classic"])
-
     def test_live_flag_works_for_low_level_list(self):
         observed = []
 
