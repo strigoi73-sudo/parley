@@ -242,7 +242,7 @@ Parley can control authenticated browser tabs and can read cookies through CDP. 
 - Respect site terms, rate limits, privacy obligations, and applicable law.
 - Prefer sanitized fixtures when adding tests.
 
-A dedicated vulnerability-reporting policy will be added as part of the repository security cleanup.
+See [SECURITY.md](SECURITY.md) for vulnerability-reporting guidance and supported-version policy.
 
 ## Project history and upstream attribution
 
