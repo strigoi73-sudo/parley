@@ -1,4 +1,4 @@
-"""In-process relay session used by the CLI and future UI."""
+"""In-process relay session used by the desktop application."""
 
 import threading
 
@@ -6,7 +6,7 @@ from .control import RelayControl
 
 
 class RelaySession:
-    """Run one relay in a worker thread with observable state and controls."""
+    """Run one desktop-managed relay in a worker thread with observable controls."""
 
     def __init__(
         self,
