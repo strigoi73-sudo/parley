@@ -48,7 +48,8 @@ Use the existing responsibility boundaries rather than putting new behavior into
 - `parley/core.py` — generic browser primitives and transport dispatch.
 - `parley/adapters/` — site-specific DOM knowledge.
 - `parley/adapters/chatgpt_strict.py` — strict ChatGPT turn extraction.
-- `parley/workflows.py` — higher-level browser/chat orchestration, participant preparation, and protocol bootstrap.
+- `parley/workflows.py` — higher-level browser/chat orchestration, participant preparation, and ChatGPT-specific transaction primitives.
+- `parley/bootstrap.py` — deterministic protocol provisioning, acknowledgement barrier, and activation orchestration.
 - `parley/relay/` — deterministic A/B sequencing, dedupe, control, state, and audit behavior.
 - `parley/app.py` — supported desktop relay presentation/controller.
 - `parley/cli.py` — desktop launcher plus lower-level developer/debug commands; do not recreate a second production relay controller here.
