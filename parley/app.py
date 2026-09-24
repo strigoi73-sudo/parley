@@ -11,6 +11,7 @@ import threading
 import time
 import tkinter as tk
 from tkinter import messagebox, simpledialog, ttk
+
 from . import core, workflows
 from .participants import eligible_chatgpt_tabs
 from .relay import RelaySession
