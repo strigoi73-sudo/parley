@@ -1,0 +1,81 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Python ${{ matrix.python-version }}
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version:
+          - "3.11"
+          - "3.12"
+          - "3.13"
+          - "3.14"
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Install Parley
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install .
+
+      - name: Verify installed CLI
+        run: |
+          python -c "import shutil; assert shutil.which('parley'), 'parley console script was not installed'"
+
+      - name: Build and inspect wheel
+        run: |
+          rm -rf dist
+          python -m pip wheel . --no-deps --wheel-dir dist
+          python - <<'PY'
+          from pathlib import Path
+          from zipfile import ZipFile
+
+          wheels = list(Path("dist").glob("parley-*.whl"))
+          assert len(wheels) == 1, f"expected one Parley wheel, found {wheels}"
+
+          with ZipFile(wheels[0]) as wheel:
+              names = set(wheel.namelist())
+
+          required = {
+              "parley/protocols/PARLEY_TEST_CHAT_A_PROTOCOL.md",
+              "parley/protocols/PARLEY_TEST_CHAT_B_PROTOCOL.md",
+          }
+          missing = sorted(required - names)
+          assert not missing, f"wheel is missing protocol package data: {missing}"
+          PY
+
+      - name: Compile Python sources
+        run: |
+          python -m compileall -q parley parley.py parley_mcp.py tests
+
+      - name: Run unit tests
+        run: |
+          python -m unittest discover -s tests -v
