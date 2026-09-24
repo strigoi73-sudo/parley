@@ -1268,6 +1268,11 @@ class ParleyApp:
             _display_reply(initial_text, "A"),
         )
 
+        self.controller.create_relay_session(
+            result,
+            prompt,
+            rounds,
+        )
         self._set_participant("A", "Ready", SUCCESS)
         self._set_participant("B", "Ready", SUCCESS)
         self._set_mode("conversation")
@@ -1281,6 +1286,7 @@ class ParleyApp:
         self._diagnostic(
             "Protocol bootstrap complete; relay starting"
         )
+        self.controller.start_relay_session()
         self._update_controls()
 
     def pause_session(self):
