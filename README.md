@@ -1,183 +1,88 @@
-<div align="center">
-
 # Parley
 
-**A lightweight CDP browser-automation framework with first-class AI workflow support.**
+Parley is a local browser-automation and message-relay tool built on the Chrome DevTools Protocol (CDP). Its current production focus is a **deterministic two-ChatGPT relay** that uses the Chrome session you are already signed into.
 
-Drive any website you're already logged into — read the DOM, fill forms, click, extract data, run JS — over the Chrome DevTools Protocol. Text-only, no screenshots, no vision tokens. Built-in workflows let the AI chats already open in your browser talk to each other and to your coding agent.
+Parley does not run an LLM of its own. It attaches to Chrome, identifies the two ChatGPT participants, provisions the conversation-local A/B protocols when requested, relays completed assistant turns, and stops rather than guessing when browser or conversation state is ambiguous.
+
+This repository is a fork of [Satyajeet-04/parley](https://github.com/Satyajeet-04/parley). The fork retains the inherited generic CDP utilities and multi-site adapters, but the actively developed product path is the two-ChatGPT relay described here.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Python 3.8+](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
-[![MCP](https://img.shields.io/badge/MCP-compatible-6E56CF.svg)](https://modelcontextprotocol.io)
-[![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](CONTRIBUTING.md)
-[![GitHub stars](https://img.shields.io/github/stars/Satyajeet-04/parley?style=social)](https://github.com/Satyajeet-04/parley/stargazers)
 
-</div>
+## Current capabilities
 
-<p align="center">
-  <a href="https://github.com/Satyajeet-04/parley/stargazers">
-    <img src="docs/bridge-demo.svg" alt="Parley bridges two AIs in real time" width="620"/>
-  </a>
-</p>
+The current `main` branch includes:
 
-<p align="center">
-  <b>⭐ If Parley saved you tokens or time, please star the repo — it helps other developers find it.</b><br/>
-  <a href="https://github.com/Satyajeet-04/parley/stargazers">Star Parley on GitHub</a>
-</p>
+- a desktop app for configuring and running two-participant ChatGPT relays;
+- live attachment to a normal, signed-in Chrome session through `DevToolsActivePort`;
+- independent participant selection for A and B:
+  - existing / existing;
+  - existing / fresh;
+  - fresh / existing;
+  - fresh / fresh;
+- barriered protocol provisioning and activation for structured Parley test conversations;
+- strict ChatGPT turn extraction with no generic page-text fallback;
+- verified send-and-wait behavior that tracks the newly submitted user turn and corresponding assistant response;
+- deterministic A → B → A relay sequencing;
+- duplicate prevention, pause/resume/stop controls, audit events, and fail-closed error handling;
+- a CLI for relay control and lower-level browser automation;
+- inherited MCP, opencode, generic CDP, and non-ChatGPT adapter functionality.
 
----
+The primary architecture and developer workflow are documented in:
 
----
+- [Architecture](docs/architecture.md)
+- [Development](docs/development.md)
+- [Contributing](CONTRIBUTING.md)
 
-## Why Parley?
+The original relay implementation plan is retained only as a historical record under [docs/history](docs/history/CHATGPT-RELAY-PLAN.md).
 
-Most "browser AI" tools screenshot the page and feed pixels to a vision model. That is slow and burns tokens. **Parley reads the DOM text directly** through the Chrome DevTools Protocol (CDP), so it is fast, cheap, and works with the sessions you are *already logged into* — no API keys, no per-token billing for the chat models themselves.
+## Quick start
 
-It also does the boring-but-hard part right: it **waits for streaming responses to actually finish** before handing you the text, using a `MutationObserver` instead of naive polling. No more half-written answers.
+### 1. Clone this fork
 
-> The name comes from the French *parler*, "to speak" — a *parley* is a conversation between two sides. That is exactly what this does: it lets two AIs (or an AI and your agent) hold a conversation.
-
-Under the hood the core CDP engine is fully general-purpose — AI chat automation is just one workflow built on top of it. You can point the same primitives at news sites, dashboards, documentation, or internal web apps.
-
-### Demo: AI-to-AI Bridge
-
-```
-$ python3 parley.py send-wait <gemini_tab> "What is the capital of France?" 60000
-{
-  "send_method": "gemini",
-  "response_text": "The capital of France is Paris.",
-  "response_complete": true,
-  "duration_ms": 5312
-}
-
-$ python3 parley.py bridge <chatgpt_tab> <gemini_tab> 1
-{
-  "round": 1,
-  "source_text": "The capital of France is Paris.",
-  "target_text": "That's correct! Paris is the capital of France...",
-  "target_complete": true,
-  "duration_ms": 8241
-}
-
-$ python3 parley.py cookies <gemini_tab> gemini.google.com
-{
-  "count": 3,
-  "cookies": [
-    {"name": "COMPASS", "value": "...", "httpOnly": true, "secure": true},
-    {"name": "NID",     "value": "...", "httpOnly": true, "secure": true}
-  ]
-}
-```
-
-## Features
-
-- **General-purpose CDP engine** — `read-dom`, `extract`, `click`, `type`, `navigate`, `wait-for`, `eval`, and cookie access work on **any** website.
-- **Token-efficient** — text extraction only, never screenshots.
-- **Universal DOM discovery** — finds the input box and latest response without brittle per-site CSS selectors, with tuned fast-paths for ChatGPT, Gemini, Claude and Grok.
-- **Reliable streaming detection** — a `MutationObserver` returns the response only once it stops changing, so you never grab a partial answer.
-- **AI-to-AI bridging** — relay a conversation between two tabs (e.g. ChatGPT ↔ Gemini) for N rounds.
-- **Self-healing** — auto-reconnects dropped CDP sockets and recovers Gemini's "stuck send button" state via a targeted reload that preserves history.
-- **Desktop app** — start a fresh A/B conversation from one prompt, watch startup progress and the live transcript, then pause, extend, finish, or stop cleanly.
-- **Four ways to use it** — desktop app, CLI, an [MCP](https://modelcontextprotocol.io) server, and a native opencode plugin.
-- **Zero heavy deps** — one small dependency (`websocket-client`). No Playwright, no Puppeteer, no headless Chrome download.
-
-### Generic Automation (any website)
-
-```bash
-# Extract all headings from a page
-python3 parley.py extract <tab_id> h2
-
-# Read a specific DOM element
-python3 parley.py read-dom <tab_id> ".main-content"
-
-# Run any JS and get the result
-python3 parley.py eval <tab_id> "document.querySelectorAll('a[href]').length"
-
-# Extract session cookies for authenticated API calls
-python3 parley.py cookies <tab_id> api.example.com
-
-# Click a button
-python3 parley.py click <tab_id> "button[data-testid='submit']"
-
-# Wait for an element to appear (up to 10s)
-python3 parley.py wait-for <tab_id> ".result-loaded"
-```
-
-## How it works
-
-```
-┌──────────────┐    CDP (ws://localhost:9222)   ┌──────────────────────────┐
-│  Your browser │ <────────────────────────────> │  parley.py               │
-│  (Brave/Chrome│                                 │  • Runtime.evaluate (DOM)│
-│   logged into │                                 │  • Input.insertText      │
-│   ChatGPT,    │                                 │  • MutationObserver wait │
-│   Gemini, ...)│                                 └────────────┬─────────────┘
-└──────────────┘                                              │
-                                              ┌───────────────┼───────────────┐
-                                              │               │               │
-                                          CLI usage      MCP server      opencode plugin
-                                                      (parley_mcp.py)    (opencode/parley.ts)
-```
-
-## Architecture
-
-Parley is organized in three layers so the generic engine stays independent of any site-specific knowledge:
-
-```
-parley/
-├── app.py             Desktop presentation over shared workflows/session APIs.
-├── core.py            Core CDP engine — connection, DOM, JS eval, input,
-│                      navigation, wait_for, cookies. Knows nothing about AI sites.
-├── adapters/          Per-site knowledge (selectors, quirks)
-│   ├── base.py          SiteAdapter base class + URL matching
-│   ├── chatgpt.py       Gemini / Claude / Grok / Generic adapters
-│   ├── gemini.py        …
-│   ├── generic.py       fallback for any website
-│   └── js.py            injected JS (universal DOM discovery, MutationObserver)
-└── workflows.py       AI workflows on top: send, send_and_wait, wait_stream,
-                       poll, bridge, robust_send (Gemini stuck-state recovery)
-```
-
-`parley.py` (root), `parley_mcp.py`, and `opencode/parley.ts` are all thin layers over these three modules.
-
-## Install
-
-**Requirements:** Python 3.8+, and Brave or Chrome/Chromium.
-
-```bash
-git clone https://github.com/Satyajeet-04/parley.git
+```powershell
+git clone https://github.com/strigoi73-sudo/parley.git
 cd parley
-pip install -r requirements.txt
 ```
 
-### 1. Enable live debugging in your normal Chrome
+### 2. Create a virtual environment and install the runtime dependency
 
-For the primary two-ChatGPT relay workflow, Parley attaches to your already-running,
-signed-in Chrome session.
+Windows PowerShell:
 
-Open:
+```powershell
+py -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+```
+
+macOS/Linux:
+
+```bash
+python3 -m venv .venv
+./.venv/bin/python -m pip install -r requirements.txt
+```
+
+Parley currently has one external runtime dependency: `websocket-client`.
+
+Formal Python package metadata and supported-version declarations will be added separately; until then, use a current Python 3 release.
+
+### 3. Enable Chrome remote debugging
+
+For the primary live relay workflow, Parley attaches to your normal Chrome profile rather than launching a separate browser.
+
+In Chrome, open:
 
 ```text
 chrome://inspect/#remote-debugging
 ```
 
-Enable remote debugging there. Chrome may ask you to approve Parley's connection
-when the process first attaches. Parley keeps one browser-level debugging
-connection open for that process so normal relay operation does not reconnect
-for every message.
+Enable remote debugging. Chrome may ask you to approve the Parley connection.
 
-Open the two ChatGPT conversations you want to use.
+If Chrome uses a nonstandard user-data directory, set:
 
-### 2. Try it
-
-```powershell
-python .\parley.py chats
+```text
+PARLEY_CHROME_USER_DATA_DIR
 ```
 
-The `chats` and `relay` commands use live mode by default and should show
-your existing signed-in ChatGPT tabs.
-
-### 3. Launch the desktop app
+### 4. Start the desktop app
 
 On Windows:
 
@@ -188,237 +93,156 @@ On Windows:
 or directly:
 
 ```powershell
-python .\parley.py app
+.\.venv\Scripts\python.exe .\parley.py app
 ```
 
-The desktop app lets you choose each participant independently. A and B can each
-use either a **Fresh chat** or an eligible **Existing chat** already open in the
-connected Chrome session, so existing/existing, existing/fresh, fresh/existing,
-and fresh/fresh setups are all supported. Enter a conversation prompt and round
-count, choose the participant sources, then **Start Parley**. Parley creates any
-fresh participants, provisions and activates the A/B protocols, sends the initial
-prompt to A, and starts the relay. Low-level target IDs and workflow events are
-available from **Diagnostics** rather than occupying the main UI.
+Choose each participant independently as a fresh conversation or an eligible existing ChatGPT tab, enter the initial prompt and round count, then start the relay.
 
-### Classic compatibility mode
+## CLI relay workflow
 
-The inherited localhost CDP transport is still available for generic automation:
+List eligible ChatGPT tabs:
+
+```powershell
+.\.venv\Scripts\python.exe .\parley.py chats
+```
+
+Run an initialized relay using two existing tabs:
+
+```powershell
+.\.venv\Scripts\python.exe .\parley.py relay --initialize --rounds 3
+```
+
+Mixed participant modes:
+
+```powershell
+# Fresh A, existing B
+.\.venv\Scripts\python.exe .\parley.py relay --fresh-a --initialize --rounds 3
+
+# Existing A, fresh B
+.\.venv\Scripts\python.exe .\parley.py relay --fresh-b --initialize --rounds 3
+
+# Both fresh
+.\.venv\Scripts\python.exe .\parley.py relay --fresh-chats --initialize --rounds 3
+```
+
+The Windows production launcher wraps the same initialized workflow:
+
+```powershell
+.\scripts\parley-live-relay-v1.ps1 -Rounds 3
+```
+
+During an interactive relay:
+
+- `p` pauses at the next safe checkpoint;
+- `r` resumes;
+- `s` shows status;
+- `q` requests a clean stop.
+
+By default, relay summaries do not retain full transferred message text. Use `--include-text` only when that is intentional.
+
+## Architecture
+
+The current runtime is organized around explicit responsibility boundaries:
+
+```text
+parley/
+├── app.py                 desktop presentation
+├── cli.py                 command-line interface
+├── core.py                generic CDP operations and transport dispatch
+├── live_browser.py        persistent live-Chrome transport
+├── adapters/
+│   ├── chatgpt_strict.py  fail-closed ChatGPT turn extraction
+│   ├── chatgpt.py         inherited ChatGPT adapter behavior
+│   ├── gemini.py
+│   ├── claude.py
+│   ├── grok.py
+│   ├── generic.py
+│   └── js.py
+├── protocols/             canonical runtime A/B protocol files
+├── relay/
+│   ├── engine.py          deterministic relay sequencing
+│   ├── session.py         session/worker lifecycle
+│   ├── control.py         pause/resume/stop
+│   ├── dedupe.py          duplicate-turn protection
+│   ├── audit.py           structured audit events
+│   └── state.py           relay states
+└── workflows.py           browser/chat orchestration and participant bootstrap
+```
+
+See [docs/architecture.md](docs/architecture.md) for the detailed responsibility model.
+
+## Secondary / inherited browser automation
+
+The low-level CLI remains useful outside the production two-ChatGPT workflow. Examples include:
+
+```powershell
+python .\parley.py list
+python .\parley.py read-dom <TAB_ID> ".main-content"
+python .\parley.py extract <TAB_ID> "a" href
+python .\parley.py click <TAB_ID> "button[type='submit']"
+python .\parley.py navigate <TAB_ID> "https://example.com"
+python .\parley.py eval <TAB_ID> "document.title"
+python .\parley.py cookies <TAB_ID> example.com
+```
+
+The inherited `bridge`, MCP server, opencode plugin, and non-ChatGPT adapters remain in the repository, but they are not the acceptance target for the current production relay work.
+
+### Classic transport
+
+The inherited localhost CDP transport remains available:
 
 ```bash
 ./scripts/start-browser.sh
 python3 parley.py --classic list
 ```
 
-You can also force live mode for another command with `--live`.
+Use `--live` or `--classic` to override transport selection where supported.
 
-## Usage (CLI)
+## Verification
 
-### Two-ChatGPT relay
+The repository contains a `unittest` regression suite under `tests/`.
 
-List only ChatGPT tabs in a numbered, human-readable form:
-
-```powershell
-python .\parley.py chats
-```
-
-Start an interactive relay by choosing the tabs when prompted:
+Windows:
 
 ```powershell
-python .\parley.py relay --rounds 3
+.\.venv\Scripts\python.exe -m compileall -q .\parley .\parley.py .\parley_mcp.py .\tests
+.\.venv\Scripts\python.exe -m unittest discover -s .\tests -v
 ```
 
-For the full production bootstrap, add `--initialize`. This performs
-barriered protocol-file provisioning before the relay begins:
+Live Chrome behavior is verified separately because it operates against a real signed-in browser session.
 
-```powershell
-python .\parley.py relay --initialize --rounds 3
+See [docs/development.md](docs/development.md) for the complete development and verification workflow.
+
+## Protocol files
+
+The canonical protocol files used by the running application are:
+
+```text
+parley/protocols/PARLEY_TEST_CHAT_A_PROTOCOL.md
+parley/protocols/PARLEY_TEST_CHAT_B_PROTOCOL.md
 ```
 
-On Windows, the versioned production launcher wraps that workflow:
+Do not maintain duplicate protocol definitions elsewhere in the repository. Changes to protocol semantics should update the runtime files and their tests together.
 
-```powershell
-.\scripts\parley-live-relay-v1.ps1 -Rounds 3
-```
+## Security and responsible use
 
-Or supply either the displayed numbers or exact tab IDs:
+Parley can control authenticated browser tabs and can read cookies through CDP. Treat browser access and cookie values as credentials.
 
-```powershell
-python .\parley.py relay 1 2 --rounds 3
-```
+- Do not commit cookies, auth headers, session tokens, or private conversation content.
+- Use Parley only with accounts, sessions, and data you are authorized to automate.
+- Respect site terms, rate limits, privacy obligations, and applicable law.
+- Prefer sanitized fixtures when adding tests.
 
-Fresh participants can also be selected per role during protocol initialization:
+A dedicated vulnerability-reporting policy will be added as part of the repository security cleanup.
 
-```powershell
-# Fresh A, existing B selected from the open-tab list
-python .\parley.py relay --fresh-a --initialize --rounds 3
+## Project history and upstream attribution
 
-# Existing A, fresh B
-python .\parley.py relay --fresh-b --initialize --rounds 3
+Parley began as a fork of [Satyajeet-04/parley](https://github.com/Satyajeet-04/parley). The original repository provided the generic CDP foundation, site adapters, CLI/MCP integrations, and the MIT-licensed base from which this fork developed.
 
-# Fresh A with a specific existing B target
-python .\parley.py relay EXISTING_B_TAB_ID --fresh-a --initialize --rounds 3
+The current fork has since added a substantial ChatGPT-to-ChatGPT relay architecture, live Chrome transport, strict turn tracking, relay safety controls, protocol bootstrap, desktop UI, and participant selection.
 
-# Both fresh (backward-compatible shorthand)
-python .\parley.py relay --fresh-chats --initialize --rounds 3
-```
-
-The Windows launcher exposes the same mixed setup with `-FreshA`, `-FreshB`,
-and `-FreshChats`.
-
-While the relay runs, enter a command and press Enter:
-
-- `p` — pause at the next safe checkpoint
-- `r` — resume
-- `s` — show current state, round count, and transfer count
-- `q` — stop after any in-flight browser transaction finishes
-
-By default, relay summaries and audit records do not print full message text. Use
-`--include-text` only when you explicitly want transfer text retained, and
-`--json` when you want the full structured final result.
-
-The lower-level `bridge` command remains available for scripting.
-
-
-```bash
-# List tabs and grab the ID you want
-python3 parley.py list
-
-# Send a message and wait for the full reply (recommended)
-python3 parley.py send-wait <TAB_ID> "Explain CDP in one sentence."
-
-# Read the latest response from a tab
-python3 parley.py read <TAB_ID>
-
-# Make two AIs talk to each other for 3 rounds
-python3 parley.py bridge <CHATGPT_TAB_ID> <GEMINI_TAB_ID> 3
-```
-
-| Command | Description |
-| --- | --- |
-| `list` | List all browser tabs with IDs, titles, URLs |
-| `read <tab>` | Read the latest AI response (auto-detected) |
-| `send <tab> <text>` | Type and submit a message |
-| `send-wait <tab> <text> [--timeout ms]` | Send **and wait** for the full response |
-| `wait-stream <tab> [timeout_ms]` | Wait for an in-progress response to finish |
-| `type <tab> <text>` | Type without submitting |
-| `click <tab> <selector>` | Click an element by CSS selector |
-| `navigate <tab> <url>` | Navigate a tab to a URL |
-| `eval <tab> <js>` | Run JavaScript and return the result |
-| `bridge <from> <to> [rounds]` | Relay a conversation between two tabs |
-| `read-dom <tab> [selector]` | Read page/element text — works on **any** site |
-| `extract <tab> <selector> [attr]` | Extract text/attribute from all matches (scraping) |
-| `wait-for <tab> <selector> [timeout_ms]` | Wait for an element to appear |
-| `cookies <tab> [domain]` | List cookies (incl. HttpOnly) via CDP |
-| `set-cookie <tab> <name> <value> <domain> [path]` | Set a cookie |
-
-### Generic automation example
-
-```bash
-# Scrape all links off a page
-python3 parley.py extract <TAB_ID> "a" href
-
-# Read an article's body text
-python3 parley.py read-dom <TAB_ID> "article"
-
-# Reuse a logged-in session elsewhere (handle cookies as secrets!)
-python3 parley.py cookies <TAB_ID> github.com
-```
-
-**Configuration** (environment variables):
-
-| Variable | Default | Purpose |
-| --- | --- | --- |
-| `PARLEY_CDP_HOST` | `localhost` | CDP host |
-| `PARLEY_CDP_PORT` | `9222` | CDP port |
-
-## Usage (MCP server)
-
-Parley ships an MCP server so any MCP client can drive your browser. Add it to your client config:
-
-```json
-{
-  "mcpServers": {
-    "parley": {
-      "command": "python3",
-      "args": ["/absolute/path/to/parley/parley_mcp.py"]
-    }
-  }
-}
-```
-
-- **Claude Desktop:** `claude_desktop_config.json`
-- **Cursor:** `.cursor/mcp.json`
-- **opencode:** add under `mcp` in `opencode.json` (or use the native plugin below)
-
-Tools exposed: `list_tabs`, `read`, `send`, `send_wait`, `wait_stream`, `type`, `click`, `navigate`, `eval`, `bridge`, `read_dom`, `extract`, `wait_for`, `cookies`.
-
-## Usage (opencode plugin)
-
-For a native opencode integration (no MCP needed):
-
-```bash
-cp parley.py ~/.opencode/scripts/parley.py
-cp opencode/parley.ts ~/.opencode/plugins/parley.ts
-```
-
-Restart opencode. You get the tools `browser_list_tabs`, `browser_read`, `browser_send`, `browser_send_wait`, `browser_bridge`, and more. Point it at a different script location with the `PARLEY_SCRIPT` env var if needed.
-
-## Example: make ChatGPT and Gemini debate
-
-```bash
-# 1. In your browser open a ChatGPT tab and a Gemini tab, sign into both.
-python3 parley.py list
-#   -> note the two tab IDs
-
-# 2. Seed one side
-python3 parley.py send-wait <CHATGPT_ID> "Argue that tabs are better than spaces. One paragraph."
-
-# 3. Relay the debate for 4 rounds
-python3 parley.py bridge <CHATGPT_ID> <GEMINI_ID> 4
-```
-
-## Troubleshooting
-
-- **`chats` / `relay` cannot find live Chrome** — open `chrome://inspect/#remote-debugging` in your normal Chrome and enable remote debugging. If Chrome uses a nonstandard user-data directory, set `PARLEY_CHROME_USER_DATA_DIR`.
-- **Chrome shows "Allow remote debugging?"** — approve it only when you intentionally started Parley. One Parley process keeps one browser-level connection open, so you should not need to approve every relay message.
-- **Classic `list` returns an error / empty** — classic mode expects a browser launched with `--remote-debugging-port=9222`. Use `scripts/start-browser.sh`, or use `--live` instead.
-- **Classic mode gets 403 on connect** — make sure the separately launched browser allows the requested DevTools origin.
-- **Response looks empty or truncated** — the model may still be generating; prefer `send-wait` / `wait-stream`, which wait for completion.
-- **Gemini stops responding after a while** — Parley auto-recovers by reloading the tab (history is preserved). If it persists, reload the Gemini tab manually.
-- **Only the first message works on a service** — you are likely using it logged-out/anonymous (rate-limited). Sign in for full use.
-
-## Roadmap
-
-- [ ] Firefox (via the Remote Protocol) support
-- [ ] Structured extraction of code blocks and tables
-- [ ] Multi-tab fan-out (ask N models the same prompt in parallel)
-- [ ] Optional websocket-free HTTP fallback
-
-## Contributing
-
-Contributions are very welcome — see [CONTRIBUTING.md](CONTRIBUTING.md). Adding support for a new AI site is usually just a few selectors.
-
-## Responsible use
-
-Parley is a general-purpose automation tool. With great DOM access comes real responsibility:
-
-- **Respect Terms of Service & robots policies.** Automating a site — especially private APIs or bulk scraping — may violate its terms even when it's your own logged-in session.
-- **Rate-limit yourself.** Don't hammer sites; add delays and cap request volume.
-- **Cookies are credentials.** `cookies` can read HttpOnly session tokens. Anyone with them can impersonate your login. Never log, print into shared transcripts, or commit them. Store only in memory or a permission-locked, git-ignored file.
-- **Mind privacy & data laws.** Only collect data you're allowed to, and handle personal data lawfully.
-
-You are responsible for how you use it.
-
-## Disclaimer
-
-Parley automates *your own* logged-in browser sessions locally. This project is not affiliated with OpenAI, Google, Anthropic, or xAI.
+The Git history and merged pull requests preserve that development record. Historical planning material is kept under `docs/history/` and should not be treated as current architecture or roadmap documentation.
 
 ## License
 
-[MIT](LICENSE) © 2026 Satyajeet
-
----
-
-<div align="center">
-If Parley saved you some tokens, consider leaving a ⭐ — it helps others find it.
-</div>
+Parley is distributed under the [MIT License](LICENSE). The original copyright and license notice are preserved from the upstream project.
